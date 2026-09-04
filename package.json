@@ -1,0 +1,62 @@
+{
+  "name": "prompton-sdk",
+  "version": "0.1.0",
+  "description": "Official PromptOn SDK for Node.js — snapshot cache, local prompt resolution and monitoring logs.",
+  "license": "Apache-2.0",
+  "author": "Polimo",
+  "homepage": "https://github.com/polimo-dev/prompton-nodejs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/polimo-dev/prompton-nodejs.git"
+  },
+  "keywords": [
+    "prompton",
+    "llm",
+    "prompt",
+    "observability",
+    "prompt-management"
+  ],
+  "type": "module",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run lint && npm run typecheck && npm run build && npm run test"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.69.0",
+    "vitest": "^3.2.7"
+  }
+}

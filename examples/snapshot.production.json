@@ -1,0 +1,69 @@
+{
+  "schema_version": 3,
+  "project": "sdkfixture",
+  "environment": "production",
+  "use_cases": {
+    "greeting": {
+      "id": "01a069cb-07cb-74c2-87dc-10a06efdc4fb",
+      "kind": "chat",
+      "input_schema": [{ "name": "name", "type": "string", "required": true }],
+      "default_params": { "max_tokens": 256 },
+      "payload_policy": {
+        "mode": "full",
+        "sample_rate": 1.0,
+        "max_bytes": 262144,
+        "retention_days": 30,
+        "encrypt": true
+      }
+    }
+  },
+  "deployments": {
+    "greeting": {
+      "id": "01a069cb-0814-77f3-a866-5433348ac431",
+      "revision": 1,
+      "model_id": "01a069cb-07c2-7e11-9011-85af7e778f96",
+      "params": { "temperature": 0.2 },
+      "provider_options": {},
+      "prompt_pins": {
+        "default": "01a069cb-07f1-7c90-b3a6-cdf8d2d7ed48",
+        "ko": "01a069cb-07fe-7de6-9710-3ccae0f81461"
+      }
+    }
+  },
+  "prompt_versions": {
+    "01a069cb-07f1-7c90-b3a6-cdf8d2d7ed48": {
+      "id": "01a069cb-07f1-7c90-b3a6-cdf8d2d7ed48",
+      "prompt_id": "01a069cb-07e8-7b2f-9f56-0a4f3a1d5a11",
+      "number": 1,
+      "engine": "liquid",
+      "messages": [
+        { "role": "system", "content": "You are a friendly greeter. Answer in one short line." },
+        { "role": "user", "content": "Say hello to {{ name }}." }
+      ],
+      "text_template": null
+    },
+    "01a069cb-07fe-7de6-9710-3ccae0f81461": {
+      "id": "01a069cb-07fe-7de6-9710-3ccae0f81461",
+      "prompt_id": "01a069cb-07f6-7a0e-8f21-2c6f9b8e3d02",
+      "number": 1,
+      "engine": "liquid",
+      "messages": [
+        { "role": "system", "content": "너는 친절한 인사 도우미다. 한 줄로 답한다." },
+        { "role": "user", "content": "{{ name }}님에게 인사해줘." }
+      ],
+      "text_template": null
+    }
+  },
+  "models": {
+    "01a069cb-07c2-7e11-9011-85af7e778f96": {
+      "id": "01a069cb-07c2-7e11-9011-85af7e778f96",
+      "provider": "openrouter",
+      "model_id": "openai/gpt-4o-mini",
+      "display_name": "GPT-4o mini",
+      "metadata": {},
+      "provider_options": { "only": ["OpenAI"] },
+      "capabilities": ["tools", "streaming"],
+      "status": "active"
+    }
+  }
+}
