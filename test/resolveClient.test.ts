@@ -41,6 +41,16 @@ const RESOLVE_BODY = {
   source: "remote",
 };
 
+function renderedResolveBody(name: string): typeof RESOLVE_BODY {
+  return {
+    ...RESOLVE_BODY,
+    messages: [
+      { role: "system", content: "You are a friendly greeter." },
+      { role: "user", content: `Say hello to ${name}.` },
+    ],
+  };
+}
+
 function make(fetch: typeof globalThis.fetch, options = {}): PromptOn {
   const client = new PromptOn({
     apiKey: "ptn_sdkfixture_key",
@@ -57,10 +67,11 @@ function make(fetch: typeof globalThis.fetch, options = {}): PromptOn {
 }
 
 describe("filledPrompt", () => {
-  it("asks for the raw template and renders it locally", async () => {
-    const fetch = fakeFetch((url) => {
+  it("asks the server to render variables", async () => {
+    const fetch = fakeFetch((url, init) => {
       if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
-      return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
+      const body = JSON.parse(init?.body as string) as { variables?: { name?: string } };
+      return new Response(JSON.stringify(renderedResolveBody(body.variables?.name ?? "")), { status: 200 });
     });
     const client = make(fetch);
     const resolved = await client.filledPrompt("greeting", { variables: { name: "Ada" } });
@@ -76,21 +87,37 @@ describe("filledPrompt", () => {
     expect(JSON.parse(post?.init?.body as string)).toEqual({
       environment: "production",
       prompt: "default",
+      variables: { name: "Ada" },
     });
   });
 
-  it("caches the answer for the TTL and renders each call's own variables", async () => {
-    const fetch = fakeFetch((url) => {
+  it("keeps server-rendered variables out of the raw-template cache", async () => {
+    const fetch = fakeFetch((url, init) => {
       if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
-      return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
+      const body = JSON.parse(init?.body as string) as { variables?: { name?: string } };
+      return new Response(
+        JSON.stringify(
+          body.variables ? renderedResolveBody(body.variables.name ?? "") : RESOLVE_BODY,
+        ),
+        { status: 200 },
+      );
     });
     const client = make(fetch);
+    const raw = await client.filledPrompt("greeting");
     const first = await client.filledPrompt("greeting", { variables: { name: "Ada" } });
     const second = await client.filledPrompt("greeting", { variables: { name: "Grace" } });
 
+    expect(raw.messages?.[1]?.content).toBe("Say hello to {{ name }}.");
     expect(first.messages?.[1]?.content).toBe("Say hello to Ada.");
     expect(second.messages?.[1]?.content).toBe("Say hello to Grace.");
-    expect(fetch.calls.filter((call) => call.url.includes("/prompt")).length).toBe(1);
+    const bodies = fetch.calls
+      .filter((call) => call.url.includes("/prompt"))
+      .map((call) => JSON.parse(call.init?.body as string));
+    expect(bodies).toEqual([
+      { environment: "production", prompt: "default" },
+      { environment: "production", prompt: "default", variables: { name: "Ada" } },
+      { environment: "production", prompt: "default", variables: { name: "Grace" } },
+    ]);
   });
 
   it("serves the cached answer when the server answers 500", async () => {
@@ -106,10 +133,10 @@ describe("filledPrompt", () => {
     const client = make(fetch, { cacheTtlMs: 1 });
     await client.filledPrompt("greeting");
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const again = await client.filledPrompt("greeting", { variables: { name: "Ada" } });
+    const again = await client.filledPrompt("greeting");
 
     expect(resolveCalls).toBe(2);
-    expect(again.messages?.[1]?.content).toBe("Say hello to Ada.");
+    expect(again.messages?.[1]?.content).toBe("Say hello to {{ name }}.");
   });
 
   it("waits out Retry-After before contacting the server again", async () => {
@@ -130,8 +157,8 @@ describe("filledPrompt", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     for (let i = 0; i < 20; i += 1) {
-      const answer = await client.filledPrompt("greeting", { variables: { name: "Ada" } });
-      expect(answer.messages?.[1]?.content).toBe("Say hello to Ada.");
+      const answer = await client.filledPrompt("greeting");
+      expect(answer.messages?.[1]?.content).toBe("Say hello to {{ name }}.");
     }
 
     expect(resolveCalls).toBe(2);
@@ -182,25 +209,26 @@ describe("filledPrompt", () => {
     expect(resolveCalls).toBe(1);
   });
 
-  it("collapses concurrent calls for one key into a single request", async () => {
+  it("collapses concurrent calls for matching variables into a single request", async () => {
     let resolveCalls = 0;
-    const fetch = fakeFetch((url) => {
+    const fetch = fakeFetch((url, init) => {
       if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
-      return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
+      const body = JSON.parse(init?.body as string) as { variables?: { name?: string } };
+      return new Response(JSON.stringify(renderedResolveBody(body.variables?.name ?? "")), { status: 200 });
     });
     const client = make(fetch);
     const answers = await Promise.all([
       client.filledPrompt("greeting", { variables: { name: "Ada" } }),
-      client.filledPrompt("greeting", { variables: { name: "Grace" } }),
-      client.filledPrompt("greeting", { variables: { name: "Alan" } }),
+      client.filledPrompt("greeting", { variables: { name: "Ada" } }),
+      client.filledPrompt("greeting", { variables: { name: "Ada" } }),
     ]);
 
     expect(resolveCalls).toBe(1);
     expect(answers.map((answer) => answer.messages?.[1]?.content)).toEqual([
       "Say hello to Ada.",
-      "Say hello to Grace.",
-      "Say hello to Alan.",
+      "Say hello to Ada.",
+      "Say hello to Ada.",
     ]);
   });
 
@@ -219,23 +247,32 @@ describe("filledPrompt", () => {
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     const answers = await Promise.all([
-      client.filledPrompt("greeting", { variables: { name: "Ada" } }),
-      client.filledPrompt("greeting", { variables: { name: "Grace" } }),
-      client.filledPrompt("greeting", { variables: { name: "Alan" } }),
+      client.filledPrompt("greeting"),
+      client.filledPrompt("greeting"),
+      client.filledPrompt("greeting"),
     ]);
 
     expect(resolveCalls).toBe(2);
     expect(answers.map((answer) => answer.messages?.[1]?.content)).toEqual([
-      "Say hello to Ada.",
-      "Say hello to Grace.",
-      "Say hello to Alan.",
+      "Say hello to {{ name }}.",
+      "Say hello to {{ name }}.",
+      "Say hello to {{ name }}.",
     ]);
   });
 
-  it("reports a missing variable from the local render", async () => {
+  it("reports a missing variable from the server render", async () => {
     const fetch = fakeFetch((url) =>
       url.includes("/prompt")
-        ? new Response(JSON.stringify(RESOLVE_BODY), { status: 200 })
+        ? new Response(
+            JSON.stringify({
+              error: {
+                code: "missing_variable",
+                message: "missing variable: name",
+                details: { missing_variable: "name" },
+              },
+            }),
+            { status: 400 },
+          )
         : snapshotResponse(snapshotDocument()),
     );
     const client = make(fetch);

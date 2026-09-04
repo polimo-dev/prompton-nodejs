@@ -35,7 +35,7 @@ import { decodeUseCaseDocument, type PayloadPolicy } from "./snapshotData.js";
 import { SnapshotManager, type RefreshResult } from "./snapshot.js";
 import { SnapshotStore, writeUseCaseDocumentFile, type UseCasesInfo } from "./store.js";
 import { render as renderTemplate, renderMessages, type Message } from "./template.js";
-import { textOf } from "./json.js";
+import { canonicalJson, textOf } from "./json.js";
 import { throttled, type Logger } from "./logger.js";
 import { VERSION } from "./version.js";
 
@@ -47,7 +47,7 @@ export interface UseCaseOptions {
 
 /** Options for {@link PromptOn.filledPrompt}. */
 export interface FilledPromptOptions extends UseCaseOptions {
-  /** Variables to render the pinned prompt with, locally. */
+  /** Variables to render the pinned prompt with, on the PromptOn server. */
   variables?: Record<string, unknown> | null;
 }
 
@@ -347,24 +347,18 @@ export class PromptOn {
    * The prompt endpoint: the simple path and the smoke test. One round trip per call, so it belongs in
    * a low-traffic path or a start-up check, never in a hot loop — {@link useCase} is that path.
    *
-   * The server is asked for the raw template and the answer is cached for the same TTL as the
-   * use-case document, so repeated calls with different variables cost one request; rendering happens
-   * locally. On `429`, `5xx` or an unreachable server the cached answer is served, and the server
-   * is left alone until `Retry-After` — or, absent that, an exponential backoff ×2 from the cache
-   * TTL capped at five minutes — has elapsed.
+   * The server is asked for the raw template when variables are absent, or for the rendered prompt
+   * when variables are present. Answers are cached for the same TTL as the use-case document per
+   * `(environment, use case, prompt, variables)` key. On `429`, `5xx` or an unreachable server the
+   * matching cached answer is served, and the server is left alone until `Retry-After` — or, absent
+   * that, an exponential backoff ×2 from the cache TTL capped at five minutes — has elapsed.
    */
   async filledPrompt(
     useCase: string,
     options: FilledPromptOptions = {},
   ): Promise<FilledPrompt> {
     const prompt = options.prompt ?? DEFAULT_PROMPT;
-    const value = await this.cachedResolve(useCase, prompt);
-
-    if (options.variables === undefined || options.variables === null) return value;
-    const rendered: FilledPrompt = { ...value };
-    if (value.messages) rendered.messages = renderMessages(value.messages, options.variables);
-    if (typeof value.text === "string") rendered.text = renderTemplate(value.text, options.variables);
-    return rendered;
+    return this.cachedResolve(useCase, prompt, options.variables);
   }
 
   /**
@@ -372,8 +366,13 @@ export class PromptOn {
    * key, at most one in flight per key, and no request at all while the server has told us to
    * wait.
    */
-  private async cachedResolve(useCase: string, prompt: string): Promise<FilledPrompt> {
-    const key = `${this.config.environment}|${useCase}|${prompt}`;
+  private async cachedResolve(
+    useCase: string,
+    prompt: string,
+    variables?: Record<string, unknown> | null,
+  ): Promise<FilledPrompt> {
+    const variablesKey = variables === undefined || variables === null ? "" : canonicalJson(variables);
+    const key = `${this.config.environment}|${useCase}|${prompt}|${variablesKey}`;
     const state = this.resolveCache.get(key);
     const now = Date.now();
 
@@ -397,7 +396,7 @@ export class PromptOn {
       lastError: state?.lastError,
       inFlight: null,
     };
-    const pending = this.fetchInto(entry, useCase, prompt);
+    const pending = this.fetchInto(entry, useCase, prompt, variables);
     entry.inFlight = pending;
     this.resolveCache.set(key, entry);
     return pending;
@@ -412,9 +411,10 @@ export class PromptOn {
     entry: ResolveState,
     useCase: string,
     prompt: string,
+    variables?: Record<string, unknown> | null,
   ): Promise<FilledPrompt> {
     try {
-      const value = await this.fetchResolve(useCase, prompt);
+      const value = await this.fetchResolve(useCase, prompt, variables);
       entry.value = value;
       entry.fetchedAt = Date.now();
       entry.nextAllowedAt = 0;
@@ -442,19 +442,26 @@ export class PromptOn {
     }
   }
 
-  private async fetchResolve(useCase: string, prompt: string): Promise<FilledPrompt> {
+  private async fetchResolve(
+    useCase: string,
+    prompt: string,
+    variables?: Record<string, unknown> | null,
+  ): Promise<FilledPrompt> {
     if (this.config.mode !== "live" || this.config.apiKey === null) {
       throw new NotReadyError(
         `prompt endpoint needs an API key and live mode (mode is ${this.config.mode})`,
       );
     }
+    const body: Record<string, unknown> = {
+      environment: this.config.environment,
+      prompt,
+    };
+    if (variables !== undefined && variables !== null) body["variables"] = variables;
+
     const response = await request(this.config, {
       method: "POST",
       path: `/use-cases/${encodeURIComponent(useCase)}/prompt`,
-      body: JSON.stringify({
-        environment: this.config.environment,
-        prompt,
-      }),
+      body: JSON.stringify(body),
       timeoutMs: this.config.requestTimeoutMs,
     });
 

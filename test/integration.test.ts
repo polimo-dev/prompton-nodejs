@@ -115,6 +115,9 @@ suite("live fixture server", () => {
 
       const rendered = local.messages(variables);
       expect(rendered.map((m) => ({ role: m.role, content: m.content }))).toEqual(body.messages);
+
+      const filled = await client.filledPrompt("greeting", { prompt, variables });
+      expect(filled.messages).toEqual(body.messages);
     }
   });
 
