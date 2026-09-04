@@ -10,7 +10,7 @@ import {
 import { fakeFetch, recordingLogger, snapshotDocument, snapshotResponse } from "./helpers.js";
 
 /**
- * `POST /resolve` is the simple path and the smoke test. It obeys the same caching rules as the
+ * `prompt endpoint` is the simple path and the smoke test. It obeys the same caching rules as the
  * snapshot: one request per TTL, rendered locally, and the cached answer on a failure.
  */
 
@@ -21,16 +21,16 @@ afterEach(async () => {
 });
 
 const RESOLVE_BODY = {
-  use_case: "greeting",
+  key: "greeting",
   kind: "chat",
   deployment: { id: "0198f2a1-0000-7000-8000-00000000d001", revision: 3 },
   prompt: "default",
-  prompts: ["default", "ko"],
+  prompt_names: ["default", "ko"],
   model_id: "0198f2a1-0000-7000-8000-00000000e001",
   model: "openai/gpt-4o-mini",
   provider: "openrouter",
-  effective_params: { temperature: 0.2 },
-  effective_provider_options: { only: ["OpenAI"] },
+  params: { temperature: 0.2 },
+  provider_options: { only: ["OpenAI"] },
   prompt_version: { id: "0198f2a1-0000-7000-8000-00000000a001", number: 2 },
   messages: [
     { role: "system", content: "You are a friendly greeter." },
@@ -38,6 +38,7 @@ const RESOLVE_BODY = {
   ],
   warnings: [],
   etag: "sha256-abc",
+  source: "remote",
 };
 
 function make(fetch: typeof globalThis.fetch, options = {}): PromptOn {
@@ -55,22 +56,24 @@ function make(fetch: typeof globalThis.fetch, options = {}): PromptOn {
   return client;
 }
 
-describe("resolveRemote", () => {
+describe("filledPrompt", () => {
   it("asks for the raw template and renders it locally", async () => {
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
       return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
     });
     const client = make(fetch);
-    const resolved = await client.resolveRemote("greeting", { variables: { name: "Ada" } });
+    const resolved = await client.filledPrompt("greeting", { variables: { name: "Ada" } });
 
     expect(resolved.model).toBe("openai/gpt-4o-mini");
+    expect(resolved.key).toBe("greeting");
+    expect(resolved.source).toBe("remote");
     expect(resolved.params).toEqual({ temperature: 0.2 });
     expect(resolved.messages?.[1]?.content).toBe("Say hello to Ada.");
 
-    const post = fetch.calls.find((call) => call.url.includes("/resolve"));
+    const post = fetch.calls.find((call) => call.url.includes("/prompt"));
+    expect(post?.url).toBe("http://ptn.test/api/v1/use-cases/greeting/prompt");
     expect(JSON.parse(post?.init?.body as string)).toEqual({
-      use_case: "greeting",
       environment: "production",
       prompt: "default",
     });
@@ -78,22 +81,22 @@ describe("resolveRemote", () => {
 
   it("caches the answer for the TTL and renders each call's own variables", async () => {
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
       return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
     });
     const client = make(fetch);
-    const first = await client.resolveRemote("greeting", { variables: { name: "Ada" } });
-    const second = await client.resolveRemote("greeting", { variables: { name: "Grace" } });
+    const first = await client.filledPrompt("greeting", { variables: { name: "Ada" } });
+    const second = await client.filledPrompt("greeting", { variables: { name: "Grace" } });
 
     expect(first.messages?.[1]?.content).toBe("Say hello to Ada.");
     expect(second.messages?.[1]?.content).toBe("Say hello to Grace.");
-    expect(fetch.calls.filter((call) => call.url.includes("/resolve")).length).toBe(1);
+    expect(fetch.calls.filter((call) => call.url.includes("/prompt")).length).toBe(1);
   });
 
   it("serves the cached answer when the server answers 500", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       if (resolveCalls === 1) return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
       return new Response(JSON.stringify({ error: { code: "internal_error", message: "boom" } }), {
@@ -101,9 +104,9 @@ describe("resolveRemote", () => {
       });
     });
     const client = make(fetch, { cacheTtlMs: 1 });
-    await client.resolveRemote("greeting");
+    await client.filledPrompt("greeting");
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const again = await client.resolveRemote("greeting", { variables: { name: "Ada" } });
+    const again = await client.filledPrompt("greeting", { variables: { name: "Ada" } });
 
     expect(resolveCalls).toBe(2);
     expect(again.messages?.[1]?.content).toBe("Say hello to Ada.");
@@ -112,7 +115,7 @@ describe("resolveRemote", () => {
   it("waits out Retry-After before contacting the server again", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       if (resolveCalls === 1) return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
       return new Response(
@@ -123,11 +126,11 @@ describe("resolveRemote", () => {
       );
     });
     const client = make(fetch, { cacheTtlMs: 20 });
-    await client.resolveRemote("greeting");
+    await client.filledPrompt("greeting");
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     for (let i = 0; i < 20; i += 1) {
-      const answer = await client.resolveRemote("greeting", { variables: { name: "Ada" } });
+      const answer = await client.filledPrompt("greeting", { variables: { name: "Ada" } });
       expect(answer.messages?.[1]?.content).toBe("Say hello to Ada.");
     }
 
@@ -137,7 +140,7 @@ describe("resolveRemote", () => {
   it("backs off exponentially from the TTL when the server sends no Retry-After", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       if (resolveCalls === 1) return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
       return new Response(JSON.stringify({ error: { code: "internal_error", message: "boom" } }), {
@@ -145,26 +148,26 @@ describe("resolveRemote", () => {
       });
     });
     const client = make(fetch, { cacheTtlMs: 40 });
-    await client.resolveRemote("greeting");
+    await client.filledPrompt("greeting");
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    await client.resolveRemote("greeting");
+    await client.filledPrompt("greeting");
     expect(resolveCalls).toBe(2);
-    await client.resolveRemote("greeting");
+    await client.filledPrompt("greeting");
     expect(resolveCalls).toBe(2);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await client.resolveRemote("greeting");
+    await client.filledPrompt("greeting");
     expect(resolveCalls).toBe(3);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await client.resolveRemote("greeting");
+    await client.filledPrompt("greeting");
     expect(resolveCalls).toBe(3);
   });
 
   it("does not hammer the server when it has nothing cached to serve", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       return new Response(
         JSON.stringify({ error: { code: "unavailable", message: "down" } }),
@@ -174,7 +177,7 @@ describe("resolveRemote", () => {
     const client = make(fetch, { cacheTtlMs: 20 });
 
     for (let i = 0; i < 5; i += 1) {
-      await expect(client.resolveRemote("greeting")).rejects.toBeInstanceOf(ApiError);
+      await expect(client.filledPrompt("greeting")).rejects.toBeInstanceOf(ApiError);
     }
     expect(resolveCalls).toBe(1);
   });
@@ -182,15 +185,15 @@ describe("resolveRemote", () => {
   it("collapses concurrent calls for one key into a single request", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
     });
     const client = make(fetch);
     const answers = await Promise.all([
-      client.resolveRemote("greeting", { variables: { name: "Ada" } }),
-      client.resolveRemote("greeting", { variables: { name: "Grace" } }),
-      client.resolveRemote("greeting", { variables: { name: "Alan" } }),
+      client.filledPrompt("greeting", { variables: { name: "Ada" } }),
+      client.filledPrompt("greeting", { variables: { name: "Grace" } }),
+      client.filledPrompt("greeting", { variables: { name: "Alan" } }),
     ]);
 
     expect(resolveCalls).toBe(1);
@@ -204,7 +207,7 @@ describe("resolveRemote", () => {
   it("gives concurrent waiters the cached answer when the shared request fails", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       if (resolveCalls === 1) return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
       return new Response(JSON.stringify({ error: { code: "unavailable", message: "down" } }), {
@@ -212,13 +215,13 @@ describe("resolveRemote", () => {
       });
     });
     const client = make(fetch, { cacheTtlMs: 20 });
-    await client.resolveRemote("greeting");
+    await client.filledPrompt("greeting");
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     const answers = await Promise.all([
-      client.resolveRemote("greeting", { variables: { name: "Ada" } }),
-      client.resolveRemote("greeting", { variables: { name: "Grace" } }),
-      client.resolveRemote("greeting", { variables: { name: "Alan" } }),
+      client.filledPrompt("greeting", { variables: { name: "Ada" } }),
+      client.filledPrompt("greeting", { variables: { name: "Grace" } }),
+      client.filledPrompt("greeting", { variables: { name: "Alan" } }),
     ]);
 
     expect(resolveCalls).toBe(2);
@@ -231,19 +234,19 @@ describe("resolveRemote", () => {
 
   it("reports a missing variable from the local render", async () => {
     const fetch = fakeFetch((url) =>
-      url.includes("/snapshot")
-        ? snapshotResponse(snapshotDocument())
-        : new Response(JSON.stringify(RESOLVE_BODY), { status: 200 }),
+      url.includes("/prompt")
+        ? new Response(JSON.stringify(RESOLVE_BODY), { status: 200 })
+        : snapshotResponse(snapshotDocument()),
     );
     const client = make(fetch);
-    await expect(client.resolveRemote("greeting", { variables: {} })).rejects.toBeInstanceOf(
+    await expect(client.filledPrompt("greeting", { variables: {} })).rejects.toBeInstanceOf(
       MissingVariableError,
     );
   });
 
   it("maps the 404 reasons onto the same errors as local resolution", async () => {
     const fetch = fakeFetch((url, init) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
       const body = JSON.parse(init?.body as string) as { prompt: string };
       if (body.prompt === "fr") {
         return new Response(
@@ -251,7 +254,7 @@ describe("resolveRemote", () => {
             error: {
               code: "not_found",
               message: "no prompt",
-              details: { reason: "unknown_prompt", prompt: "fr", available_prompts: ["default"] },
+              details: { reason: "unknown_prompt", key: "greeting", prompt: "fr", prompt_names: ["default"] },
             },
           }),
           { status: 404 },
@@ -266,29 +269,39 @@ describe("resolveRemote", () => {
     });
     const client = make(fetch);
 
-    await expect(client.resolveRemote("draft")).rejects.toBeInstanceOf(UnresolvedError);
-    await expect(client.resolveRemote("greeting", { prompt: "fr" })).rejects.toBeInstanceOf(
-      UnknownPromptError,
-    );
+    try {
+      await client.filledPrompt("draft");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnresolvedError);
+      expect((error as UnresolvedError).useCase).toBe("draft");
+    }
+    try {
+      await client.filledPrompt("greeting", { prompt: "fr" });
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(UnknownPromptError);
+      expect((error as UnknownPromptError).useCase).toBe("greeting");
+    }
   });
 
   it("surfaces an unexpected status as an ApiError", async () => {
     const fetch = fakeFetch((url) =>
-      url.includes("/snapshot")
-        ? snapshotResponse(snapshotDocument())
-        : new Response(
-            JSON.stringify({ error: { code: "forbidden", message: "API key lacks the resolve scope" } }),
+      url.includes("/prompt")
+        ? new Response(
+            JSON.stringify({ error: { code: "forbidden", message: "API key lacks the read scope" } }),
             { status: 403 },
-          ),
+          )
+        : snapshotResponse(snapshotDocument()),
     );
     const client = make(fetch);
     try {
-      await client.resolveRemote("greeting");
+      await client.filledPrompt("greeting");
       expect.unreachable("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(ApiError);
       expect((error as ApiError).status).toBe(403);
-      expect((error as ApiError).message).toBe("API key lacks the resolve scope");
+      expect((error as ApiError).message).toBe("API key lacks the read scope");
     }
   });
 });

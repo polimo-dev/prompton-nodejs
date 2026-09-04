@@ -1,10 +1,10 @@
 import { UnknownPromptError, UnknownUseCaseError, UnresolvedError } from "./errors.js";
-import type { PayloadPolicy, SnapshotData } from "./snapshotData.js";
+import type { PayloadPolicy, UseCaseDocument } from "./snapshotData.js";
 import type { Engine, Message } from "./template.js";
 
 /**
  * Local resolution: snapshot + use case key (+ prompt name) → which model, params and prompt
- * version to use. This is exactly what `POST /resolve` does on the server, minus the rendering.
+ * version to use. This is exactly what the prompt endpoint does on the server, minus the rendering.
  *
  * A deployment revision is a pin, not a router: no rules, no conditions, no weights. The only
  * selection axis at request time is the prompt name; the environment decided which snapshot was
@@ -64,8 +64,8 @@ export interface Resolution {
   warnings: ResolutionWarning[];
 }
 
-/** Options for {@link resolveFromSnapshot}. */
-export interface ResolveOptions {
+/** Options for looking up a use case in a decoded document. */
+export interface UseCaseLookupOptions {
   prompt?: string | null;
   source?: ResolutionSource;
   etag?: string | null;
@@ -79,9 +79,9 @@ export interface ResolveOptions {
  * hard-coded prompt.
  */
 export function resolveFromSnapshot(
-  snapshot: SnapshotData,
+  snapshot: UseCaseDocument,
   useCaseKey: string,
-  options: ResolveOptions = {},
+  options: UseCaseLookupOptions = {},
 ): Resolution {
   const useCase = snapshot.useCases[useCaseKey];
   if (!useCase) throw new UnknownUseCaseError(useCaseKey);
@@ -139,9 +139,9 @@ export function resolveFromSnapshot(
 
 /**
  * The prompt names this use case's live deployment pins, sorted. Empty when there is no
- * deployment. These are exactly the values `resolve()` accepts as a prompt name.
+ * deployment. These are exactly the values `useCase()` accepts as a prompt name.
  */
-export function promptNamesFromSnapshot(snapshot: SnapshotData, useCaseKey: string): string[] {
+export function promptNamesFromSnapshot(snapshot: UseCaseDocument, useCaseKey: string): string[] {
   const useCase = snapshot.useCases[useCaseKey];
   if (!useCase) throw new UnknownUseCaseError(useCaseKey);
   if (!useCase.deployment) return [];

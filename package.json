@@ -1,7 +1,7 @@
 {
   "name": "prompton-sdk",
-  "version": "0.1.0",
-  "description": "Official PromptOn SDK for Node.js — snapshot cache, local prompt resolution and monitoring logs.",
+  "version": "0.2.0",
+  "description": "Official PromptOn SDK for Node.js — use-case cache, local prompt rendering and monitoring logs.",
   "license": "Apache-2.0",
   "author": "Polimo",
   "homepage": "https://github.com/polimo-dev/prompton-nodejs",

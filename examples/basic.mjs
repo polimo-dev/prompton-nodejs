@@ -3,8 +3,8 @@
  *
  *   npm run build && node examples/basic.mjs
  *
- * With `PTN_API_KEY` set it fetches the live snapshot and really sends the monitoring log; without
- * one it runs from the bundled snapshot in this directory and prints the record it would have sent.
+ * With `PTN_API_KEY` set it fetches the live use-case document and really sends the monitoring log; without
+ * one it runs from the bundled use-case document in this directory and prints the record it would have sent.
  * Either way it is the same code — that is the point of the bundle.
  */
 
@@ -15,7 +15,7 @@ const live = Boolean(process.env.PTN_API_KEY);
 
 const prompton = new PromptOn({
   // Committed at migration time so a cold start with no network still resolves.
-  bundlePath: fileURLToPath(new URL("./snapshot.production.json", import.meta.url)),
+  bundlePath: fileURLToPath(new URL("./use-cases.production.json", import.meta.url)),
   diskCache: false,
   // In test mode nothing is sent; the records are kept for inspection.
   mode: live ? "live" : "test",
@@ -24,15 +24,15 @@ const prompton = new PromptOn({
 // Optional: a short-lived script wants the first fetch before it resolves.
 await prompton.ready();
 
-// 1. Resolve — synchronous, served from memory, never blocks on the network.
-const resolution = prompton.resolve("greeting", { prompt: "default" });
+// 1. Resolve a use case — synchronous, served from memory, never blocks on the network.
+const useCase = prompton.useCase("greeting", { prompt: "default" });
 console.info(
-  `use case ${resolution.useCase} → model ${resolution.model} (revision ${resolution.deploymentRevision}, from ${resolution.source})`,
+  `use case ${useCase.key} → model ${useCase.model} (revision ${useCase.deployment.revision}, from ${useCase.source})`,
 );
 
 // 2. Render this call's variables into the pinned prompt.
 const variables = { name: "Ada" };
-const messages = prompton.renderChat(resolution, variables);
+const messages = useCase.messages(variables);
 console.info("messages:", JSON.stringify(messages, null, 2));
 
 // 3. Call the provider yourself, with your own key and your own HTTP client. PromptOn is never in
@@ -48,8 +48,8 @@ async function callProvider({ model, params, providerOptions, messages: sent }) 
 
 // 4. Time the call and log it. Whatever the function returns comes back unchanged; whatever it
 //    throws is logged as an error record and rethrown.
-const response = await prompton.withGeneration(
-  resolution,
+const response = await useCase.track(
+  () => callProvider({ ...useCase, messages }),
   {
     variables,
     inputMessages: messages,
@@ -58,7 +58,6 @@ const response = await prompton.withGeneration(
     context: { language: "en", plan: "pro" },
     metadata: { attempt: 1 },
   },
-  () => callProvider({ ...resolution, messages }),
   // Map the provider's response onto the fields a monitoring log records.
   (result) => ({
     content: result.choices[0].message.content,

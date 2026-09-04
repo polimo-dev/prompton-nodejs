@@ -1,11 +1,11 @@
 import type { Engine, Message } from "./template.js";
 
 /**
- * Decoding of the `GET /snapshot` body. Schema v3 only.
+ * Decoding of the `GET /use-cases` body. Schema v4 only.
  *
- * A version above 3 decodes with a warning and only the fields this SDK knows (the contract
- * promises additive changes); versions 1 and 2 are refused outright, because a deployment revision
- * used to be a router there rather than a pin.
+ * This SDK reads exactly schema v4. Older, newer, missing, and legacy-version documents are
+ * refused outright because a deployment revision must be interpreted as one model plus pinned
+ * prompt versions, not as a router.
  */
 
 /** How much of a generation's raw text the app may send. */
@@ -27,7 +27,7 @@ export interface InputVariable {
 }
 
 /** A deployment revision: one model, one pinned prompt version per prompt name. */
-export interface SnapshotDeployment {
+export interface UseCaseDeployment {
   id: string | null;
   useCaseKey: string;
   revision: number | null;
@@ -38,18 +38,18 @@ export interface SnapshotDeployment {
 }
 
 /** A use case plus the deployment pinned for it in this environment. */
-export interface SnapshotUseCase {
+export interface UseCaseDefinition {
   id: string | null;
   key: string;
   kind: "chat" | "text" | "embedding" | (string & {});
   inputSchema: InputVariable[];
   defaultParams: Record<string, unknown>;
   payloadPolicy: PayloadPolicy | null;
-  deployment: SnapshotDeployment | null;
+  deployment: UseCaseDeployment | null;
 }
 
 /** An immutable prompt version. */
-export interface SnapshotPromptVersion {
+export interface UseCasePromptVersion {
   id: string;
   promptId: string | null;
   number: number | null;
@@ -59,7 +59,7 @@ export interface SnapshotPromptVersion {
 }
 
 /** A catalog model. */
-export interface SnapshotModel {
+export interface UseCaseModel {
   id: string;
   provider: string | null;
   modelId: string | null;
@@ -72,15 +72,15 @@ export interface SnapshotModel {
   status: string | null;
 }
 
-/** A decoded snapshot document. */
-export interface SnapshotData {
+/** A decoded use-case document. */
+export interface UseCaseDocument {
   schemaVersion: number;
   project: string | null;
   environment: string | null;
-  useCases: Record<string, SnapshotUseCase>;
-  deployments: Record<string, SnapshotDeployment>;
-  promptVersions: Record<string, SnapshotPromptVersion>;
-  models: Record<string, SnapshotModel>;
+  useCases: Record<string, UseCaseDefinition>;
+  deployments: Record<string, UseCaseDeployment>;
+  promptVersions: Record<string, UseCasePromptVersion>;
+  models: Record<string, UseCaseModel>;
 }
 
 /** Something the decoder tolerated but wants recorded. */
@@ -89,61 +89,57 @@ export interface DecodeWarning {
   detail: unknown;
 }
 
-/** The result of decoding a snapshot document. */
+/** The result of decoding a use-case document. */
 export interface DecodeResult {
-  data: SnapshotData;
+  data: UseCaseDocument;
   warnings: DecodeWarning[];
 }
 
-/** The snapshot schema version this SDK reads. */
-export const SCHEMA_VERSION = 3;
+/** The use-case document schema version this SDK reads. */
+export const SCHEMA_VERSION = 4;
 
 const KINDS = new Set(["chat", "text", "embedding"]);
 const ENGINES = new Set(["liquid", "raw"]);
 const PAYLOAD_MODES = new Set(["full", "hash", "none"]);
 const VARIABLE_TYPES = new Set(["string", "number", "boolean", "list", "map"]);
 
-/** Decodes a snapshot JSON string. Throws on a body this SDK cannot read. */
-export function decodeSnapshotJson(json: string): DecodeResult {
+/** Decodes a use-case document JSON string. Throws on a body this SDK cannot read. */
+export function decodeUseCaseDocumentJson(json: string): DecodeResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch (error) {
-    throw new Error(`snapshot is not valid JSON: ${(error as Error).message}`);
+    throw new Error(`use-case document is not valid JSON: ${(error as Error).message}`);
   }
-  return decodeSnapshot(parsed);
+  return decodeUseCaseDocument(parsed);
 }
 
-/** Decodes an already-parsed snapshot document. Throws on a body this SDK cannot read. */
-export function decodeSnapshot(input: unknown): DecodeResult {
-  if (!isRecord(input)) throw new Error("snapshot must be an object");
+/** Decodes an already-parsed use-case document. Throws on a body this SDK cannot read. */
+export function decodeUseCaseDocument(input: unknown): DecodeResult {
+  if (!isRecord(input)) throw new Error("use-case document must be an object");
   const warnings: DecodeWarning[] = [];
 
-  const rawVersion = input["schema_version"] ?? input["version"];
-  let schemaVersion = SCHEMA_VERSION;
+  const rawVersion = input["schema_version"];
   if (typeof rawVersion === "number" && Number.isInteger(rawVersion)) {
-    if (rawVersion > SCHEMA_VERSION) {
-      warnings.push({ kind: "unknown_schema_version", detail: rawVersion });
-      schemaVersion = rawVersion;
-    } else if (rawVersion < SCHEMA_VERSION) {
+    if (rawVersion !== SCHEMA_VERSION) {
       throw new Error(
-        `unsupported snapshot schema_version ${String(rawVersion)}; this SDK reads version ${String(SCHEMA_VERSION)}`,
+        `unsupported use-case document schema_version ${String(rawVersion)}; this SDK reads version ${String(SCHEMA_VERSION)}`,
       );
     }
   } else if (rawVersion !== undefined && rawVersion !== null) {
-    throw new Error("snapshot schema_version must be a positive integer");
-  } else if (!isRecord(input["deployments"])) {
-    throw new Error("snapshot schema_version is required");
+    throw new Error(`use-case document schema_version must be integer ${String(SCHEMA_VERSION)}`);
+  } else {
+    throw new Error("use-case document schema_version is required");
   }
 
-  if (!isRecord(input["use_cases"])) throw new Error("snapshot use_cases is required");
+  if (!isRecord(input["use_cases"])) throw new Error("use-case document use_cases is required");
 
   const deployments = decodeDeployments(input["deployments"], warnings);
   const useCases = decodeUseCases(input["use_cases"], deployments, warnings);
 
   return {
     data: {
-      schemaVersion,
+      schemaVersion: rawVersion,
       project: asString(input["project"]),
       environment: asString(input["environment"]),
       useCases,
@@ -157,10 +153,10 @@ export function decodeSnapshot(input: unknown): DecodeResult {
 
 function decodeUseCases(
   raw: Record<string, unknown>,
-  deployments: Record<string, SnapshotDeployment>,
+  deployments: Record<string, UseCaseDeployment>,
   warnings: DecodeWarning[],
-): Record<string, SnapshotUseCase> {
-  const useCases: Record<string, SnapshotUseCase> = {};
+): Record<string, UseCaseDefinition> {
+  const useCases: Record<string, UseCaseDefinition> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (!isRecord(value)) {
       warnings.push({ kind: "invalid_use_case", detail: key });
@@ -222,8 +218,8 @@ function decodePayloadPolicy(raw: unknown, warnings: DecodeWarning[]): PayloadPo
 function decodeDeployments(
   raw: unknown,
   warnings: DecodeWarning[],
-): Record<string, SnapshotDeployment> {
-  const deployments: Record<string, SnapshotDeployment> = {};
+): Record<string, UseCaseDeployment> {
+  const deployments: Record<string, UseCaseDeployment> = {};
   if (raw === null || raw === undefined) return deployments;
   if (!isRecord(raw)) {
     warnings.push({ kind: "invalid_deployments", detail: raw });
@@ -297,7 +293,7 @@ function decodeById<T extends { id: string }>(
 function decodePromptVersion(
   raw: Record<string, unknown>,
   fallbackId: string,
-): SnapshotPromptVersion {
+): UseCasePromptVersion {
   const engine = asString(raw["engine"]) ?? "liquid";
   return {
     id: asString(raw["id"]) ?? fallbackId,
@@ -325,7 +321,7 @@ function decodeMessages(raw: unknown): Message[] | null {
   return messages;
 }
 
-function decodeModel(raw: Record<string, unknown>, fallbackId: string): SnapshotModel {
+function decodeModel(raw: Record<string, unknown>, fallbackId: string): UseCaseModel {
   const capabilities = Array.isArray(raw["capabilities"])
     ? raw["capabilities"].map((value) => asString(value)).filter((value): value is string => value !== null)
     : [];

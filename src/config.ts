@@ -2,7 +2,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigError } from "./errors.js";
 import { consoleLogger, silentLogger, type Logger } from "./logger.js";
-import type { GenerationRecord, NormalizedPolicy } from "./payload.js";
+import type { LogRecord, NormalizedPolicy } from "./payload.js";
 import { USER_AGENT } from "./version.js";
 
 /** How the SDK talks (or does not talk) to PromptOn. */
@@ -32,23 +32,23 @@ export interface PromptOnOptions {
   environment?: string;
   /** Project slug; parsed out of the API key when not given. Names the disk-cache file. */
   project?: string | null;
-  /** How long a snapshot is served without revalidating. Default 10 000 ms. */
+  /** How long a use-case document is served without revalidating. Default 10 000 ms. */
   cacheTtlMs?: number;
   /** Per-request timeout. Default 5000 ms. */
   requestTimeoutMs?: number;
-  /** Timeout of the very first snapshot fetch, which never blocks a generation. Default 3000 ms. */
+  /** Timeout of the very first use-case document fetch, which never blocks a generation. Default 3000 ms. */
   initialFetchTimeoutMs?: number;
   /** `true` (default) for the standard path, `false` to disable, or an explicit file path. */
   diskCache?: boolean | string;
-  /** A snapshot file committed into the app, used when memory and disk are empty. */
+  /** A use-case document file committed into the app, used when memory and disk are empty. */
   bundlePath?: string | null;
   /** `live` (default), `offline` (disk and bundle only) or `test` (no HTTP, logs captured). */
   mode?: Mode;
   /** Send `end_user_ref` as an unkeyed sha256 hex. */
   hashEndUser?: boolean;
   /** Applied to every record last, after truncation. Return the record to send. */
-  redact?: ((record: GenerationRecord) => GenerationRecord | null | undefined) | null;
-  /** Payload policy used when the snapshot's use case declares none. */
+  redact?: ((record: LogRecord) => LogRecord | null | undefined) | null;
+  /** Payload policy used when the use-case document's use case declares none. */
   payloadDefaults?: Partial<NormalizedPolicy>;
   /**
    * Raise instead of dropping when {@link PromptOn.log} is handed a record the server would
@@ -58,7 +58,7 @@ export interface PromptOnOptions {
   strictRecords?: boolean;
   /** Monitoring-log buffer knobs. */
   log?: LogOptions;
-  /** Poll for snapshot changes in the background. Default `true` outside test mode. */
+  /** Poll for use-case document changes in the background. Default `true` outside test mode. */
   poll?: boolean;
   /** Flush the log buffer when the process is about to exit. Default `true`. */
   flushOnExit?: boolean;
@@ -81,7 +81,7 @@ export interface ResolvedConfig {
   bundlePath: string | null;
   mode: Mode;
   hashEndUser: boolean;
-  redact: ((record: GenerationRecord) => GenerationRecord | null | undefined) | null;
+  redact: ((record: LogRecord) => LogRecord | null | undefined) | null;
   payloadDefaults: Partial<NormalizedPolicy>;
   strictRecords: boolean;
   log: Required<LogOptions>;
@@ -166,7 +166,7 @@ export function projectFromApiKey(apiKey: string | null): string | null {
   return match ? (match[1] as string) : null;
 }
 
-/** Where a snapshot is cached when no explicit path is configured. */
+/** Where a use-case document is cached when no explicit path is configured. */
 export function defaultCacheDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env["PTN_CACHE_DIR"];
   if (explicit) return explicit;
@@ -199,7 +199,7 @@ function diskCachePath(
   if (typeof option === "string" && option !== "") return option;
   const configured = env["PTN_DISK_CACHE"];
   if (configured) return configured;
-  const name = `snapshot-${project ?? "default"}-${environment}.json`;
+  const name = `use-cases-${project ?? "default"}-${environment}.json`;
   return join(defaultCacheDir(env), name);
 }
 

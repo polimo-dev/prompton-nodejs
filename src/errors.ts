@@ -29,7 +29,7 @@ export class PromptOnError extends Error {
 
 /**
  * Nothing is cached and PromptOn could not be reached: neither memory, disk nor a bundle holds a
- * snapshot for this environment. This is the only resolution failure that means "PromptOn is
+ * use-case document for this environment. This is the only lookup failure that means "PromptOn is
  * unreachable"; the others mean the deployment or the call is wrong.
  */
 export class NotReadyError extends PromptOnError {
@@ -38,7 +38,7 @@ export class NotReadyError extends PromptOnError {
   }
 }
 
-/** The use case key is not in the snapshot. */
+/** The use case key is not in the use-case document. */
 export class UnknownUseCaseError extends PromptOnError {
   readonly useCase: string;
 
@@ -65,20 +65,20 @@ export class UnresolvedError extends PromptOnError {
 export class UnknownPromptError extends PromptOnError {
   readonly useCase: string;
   readonly prompt: string;
-  readonly availablePrompts: string[];
+  readonly promptNames: string[];
 
-  constructor(useCase: string, prompt: string, availablePrompts: string[]) {
+  constructor(useCase: string, prompt: string, promptNames: string[]) {
     super(
       "unknown_prompt",
-      `the live deployment of ${useCase} pins no prompt named "${prompt}" — available prompts: ${availablePrompts.join(", ")}`,
+      `the live deployment of ${useCase} pins no prompt named "${prompt}" — available prompt names: ${promptNames.join(", ")}`,
     );
     this.useCase = useCase;
     this.prompt = prompt;
-    this.availablePrompts = availablePrompts;
+    this.promptNames = promptNames;
   }
 }
 
-/** `render()` was called on a resolution that carries no template (an embedding use case). */
+/** `messages()` or `text()` was called on a use case that carries no template. */
 export class NoTemplateError extends PromptOnError {
   constructor(useCase: string) {
     super("no_template", `use case ${useCase} has no prompt template to render`);

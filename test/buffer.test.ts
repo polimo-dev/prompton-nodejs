@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { backoffMs, LogBuffer, type SendOutcome } from "../src/buffer.js";
-import type { GenerationRecord } from "../src/index.js";
+import { backoffMs, LogBuffer, type SendResult } from "../src/buffer.js";
+import type { LogRecord } from "../src/index.js";
 import { recordingLogger } from "./helpers.js";
 
 /**
@@ -9,7 +9,7 @@ import { recordingLogger } from "./helpers.js";
  * 413, drop anything else, and never lose the newest records to a queue that is already full.
  */
 
-function record(id: string, extra: GenerationRecord = {}): GenerationRecord {
+function record(id: string, extra: LogRecord = {}): LogRecord {
   return {
     id,
     use_case: "greeting",
@@ -20,7 +20,7 @@ function record(id: string, extra: GenerationRecord = {}): GenerationRecord {
   };
 }
 
-function accepted(count: number): SendOutcome {
+function accepted(count: number): SendResult {
   return { kind: "accepted", accepted: count, duplicates: 0, rejected: [] };
 }
 
@@ -31,7 +31,7 @@ interface Harness {
 }
 
 function harness(
-  script: (records: GenerationRecord[], call: number) => SendOutcome | Promise<SendOutcome>,
+  script: (records: LogRecord[], call: number) => SendResult | Promise<SendResult>,
   options: Partial<ConstructorParameters<typeof LogBuffer>[1]> = {},
 ): Harness {
   const batches: string[][] = [];

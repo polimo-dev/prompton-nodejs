@@ -1,5 +1,5 @@
 import { InvalidRecordError } from "./errors.js";
-import type { GenerationRecord } from "./payload.js";
+import type { LogRecord } from "./payload.js";
 import type { Resolution } from "./resolver.js";
 import { textOf } from "./json.js";
 import { normalizeStopKind, type StopKind } from "./stopKind.js";
@@ -8,7 +8,7 @@ import { uuidv7 } from "./uuidv7.js";
 import { SDK_NAME, VERSION } from "./version.js";
 
 /** What a provider call reported back, in the shape the record builder understands. */
-export interface ProviderOutcome {
+export interface ResultLike {
   /** The completion text. */
   content?: string | null;
   /** Tool calls, in the provider's own shape. */
@@ -32,8 +32,59 @@ export interface ProviderOutcome {
   isByok?: boolean | null;
 }
 
-/** Everything about this particular call that is not in the resolution or the outcome. */
-export interface GenerationMeta {
+export class Result implements ResultLike {
+  content?: string | null;
+  toolCalls?: unknown[] | null;
+  finishReason?: string | null;
+  stopKind?: StopKind | (string & {}) | null;
+  modelUsed?: string | null;
+  upstreamProvider?: string | null;
+  usage?: { inputTokens?: number | null; outputTokens?: number | null; raw?: unknown } | null;
+  costUsd?: number | null;
+  costSource?: "provider" | "catalog" | "unknown" | null;
+  isByok?: boolean | null;
+  result?: unknown;
+
+  constructor(input: ResultLike & { result?: unknown } = {}) {
+    Object.assign(this, input);
+  }
+
+  static fromOpenAI(answer: unknown): Result {
+    const choice = first(get(answer, "choices"));
+    const message = get(choice, "message");
+    const usage = get(answer, "usage");
+    return new Result({
+      content: stringOrNull(get(message, "content")),
+      toolCalls: arrayOrNull(get(message, "tool_calls")),
+      finishReason: stringOrNull(get(choice, "finish_reason")),
+      usage: {
+        inputTokens: numberOrNull(get(usage, "prompt_tokens") ?? get(usage, "input_tokens")),
+        outputTokens: numberOrNull(get(usage, "completion_tokens") ?? get(usage, "output_tokens")),
+        raw: usage,
+      },
+      modelUsed: stringOrNull(get(answer, "model")),
+      result: answer,
+    });
+  }
+
+  static fromAnthropic(answer: unknown): Result {
+    const usage = get(answer, "usage");
+    return new Result({
+      content: anthropicContent(get(answer, "content")),
+      finishReason: stringOrNull(get(answer, "stop_reason")),
+      usage: {
+        inputTokens: numberOrNull(get(usage, "input_tokens")),
+        outputTokens: numberOrNull(get(usage, "output_tokens")),
+        raw: usage,
+      },
+      modelUsed: stringOrNull(get(answer, "model")),
+      result: answer,
+    });
+  }
+}
+
+/** Everything about this particular call that is not in the use-case lookup or the result. */
+export interface LogMeta {
   /** A pre-issued UUIDv7; one is generated when absent. */
   id?: string;
   /** The variables the prompt was rendered with. */
@@ -71,7 +122,7 @@ export const ERROR_KINDS = [
 export type ErrorKind = (typeof ERROR_KINDS)[number];
 
 /** A provider failure, as the record records it. */
-export interface GenerationError {
+export interface LogError {
   kind?: ErrorKind | (string & {});
   status?: number;
   message?: string;
@@ -85,32 +136,32 @@ export function sdkBlock(): { name: string; version: string } {
 }
 
 /** A fresh monitoring-log id. UUIDv7, because the server's column is one. */
-export function generationId(): string {
+export function logId(): string {
   return uuidv7();
 }
 
 interface BuildInput {
   resolution: Resolution;
-  meta: GenerationMeta;
+  meta: LogMeta;
   id: string;
   startedAt: Date;
   latencyMs: number;
   status: "ok" | "error";
-  outcome: ProviderOutcome | null;
-  error: GenerationError | null;
+  result: ResultLike | null;
+  error: LogError | null;
 }
 
-/** Assembles one record in the shape `POST /generations` accepts. */
-export function buildRecord(input: BuildInput): GenerationRecord {
-  const { resolution: r, meta, outcome } = input;
-  const usage = outcome?.usage ?? null;
+/** Assembles one record in the shape `POST /logs` accepts. */
+export function buildRecord(input: BuildInput): LogRecord {
+  const { resolution: r, meta, result } = input;
+  const usage = result?.usage ?? null;
 
   const metadata: Record<string, unknown> = { ...(meta.metadata ?? {}) };
-  if (outcome?.isByok !== undefined && outcome.isByok !== null) {
-    metadata["is_byok"] = outcome.isByok;
+  if (result?.isByok !== undefined && result.isByok !== null) {
+    metadata["is_byok"] = result.isByok;
   }
 
-  const record: GenerationRecord = {
+  const record: LogRecord = {
     id: input.id,
     use_case: r.useCase,
     deployment_id: r.deploymentId,
@@ -118,25 +169,25 @@ export function buildRecord(input: BuildInput): GenerationRecord {
     prompt: r.prompt,
     prompt_version_id: r.promptVersionId,
     model_id: r.modelId,
-    resolution_source: r.source,
+    source: r.source,
     context: { ...(meta.context ?? {}) },
     kind: r.kind,
     model: r.model,
-    model_used: outcome?.modelUsed ?? null,
+    model_used: result?.modelUsed ?? null,
     provider: r.provider,
-    upstream_provider: outcome?.upstreamProvider ?? null,
+    upstream_provider: result?.upstreamProvider ?? null,
     params: { ...r.params, ...(meta.params ?? {}) },
     input: buildInputBlock(meta),
-    output: buildOutputBlock(outcome),
+    output: buildOutputBlock(result),
     status: input.status,
-    finish_reason: outcome?.finishReason ?? null,
-    stop_kind: deriveStopKind(outcome),
+    finish_reason: result?.finishReason ?? null,
+    stop_kind: deriveStopKind(result),
     error: buildError(input.error),
     usage: {
       input_tokens: usage?.inputTokens ?? null,
       output_tokens: usage?.outputTokens ?? null,
-      cost_usd: outcome?.costUsd ?? null,
-      cost_source: outcome?.costSource ?? "unknown",
+      cost_usd: result?.costUsd ?? null,
+      cost_source: result?.costSource ?? "unknown",
       raw: usage?.raw ?? null,
     },
     latency_ms: input.latencyMs,
@@ -158,11 +209,11 @@ export function buildRecord(input: BuildInput): GenerationRecord {
  * nothing but an index to say why is worse than an exception at the call site.
  */
 export function completeRecord(
-  record: GenerationRecord,
+  record: LogRecord,
   resolution: Resolution | null,
-): GenerationRecord {
-  const out: GenerationRecord = { ...record };
-  out["id"] ??= generationId();
+): LogRecord {
+  const out: LogRecord = { ...record };
+  out["id"] ??= logId();
   out["started_at"] ??= new Date().toISOString();
   out["sdk"] ??= sdkBlock();
 
@@ -170,7 +221,7 @@ export function completeRecord(
     out["use_case"] ??= resolution.useCase;
     out["kind"] ??= resolution.kind;
     out["model"] ??= resolution.model;
-    out["resolution_source"] ??= resolution.source;
+    out["source"] ??= resolution.source;
     if (resolution.deploymentId !== null) out["deployment_id"] ??= resolution.deploymentId;
     if (resolution.deploymentRevision !== null) {
       out["deployment_revision"] ??= resolution.deploymentRevision;
@@ -197,7 +248,7 @@ export function completeRecord(
 }
 
 /** Classifies whatever the app threw into one of the seven ingest error kinds. */
-export function classifyError(error: unknown): GenerationError {
+export function classifyError(error: unknown): LogError {
   if (error && typeof error === "object") {
     const record = error as Record<string, unknown>;
     const status = typeof record["status"] === "number" ? record["status"] : undefined;
@@ -216,7 +267,7 @@ export function classifyError(error: unknown): GenerationError {
     else if (name === "TypeError" && /fetch failed|network/iu.test(message)) kind = "transport";
     else kind = "app";
 
-    const out: GenerationError = { kind, message };
+    const out: LogError = { kind, message };
     if (status !== undefined) out.status = status;
     return out;
   }
@@ -225,7 +276,7 @@ export function classifyError(error: unknown): GenerationError {
 
 // ---------------------------------------------------------------------------
 
-function buildInputBlock(meta: GenerationMeta): Record<string, unknown> | null {
+function buildInputBlock(meta: LogMeta): Record<string, unknown> | null {
   const input: Record<string, unknown> = {};
   if (meta.variables !== null && meta.variables !== undefined) input["variables"] = meta.variables;
   if (meta.inputMessages !== null && meta.inputMessages !== undefined) {
@@ -235,7 +286,7 @@ function buildInputBlock(meta: GenerationMeta): Record<string, unknown> | null {
   return Object.keys(input).length === 0 ? null : input;
 }
 
-function buildOutputBlock(outcome: ProviderOutcome | null): Record<string, unknown> | null {
+function buildOutputBlock(outcome: ResultLike | null): Record<string, unknown> | null {
   if (!outcome) return null;
   const output: Record<string, unknown> = {};
   if (outcome.content !== null && outcome.content !== undefined) output["content"] = outcome.content;
@@ -245,7 +296,7 @@ function buildOutputBlock(outcome: ProviderOutcome | null): Record<string, unkno
   return Object.keys(output).length === 0 ? null : output;
 }
 
-function buildError(error: GenerationError | null): Record<string, unknown> | null {
+function buildError(error: LogError | null): Record<string, unknown> | null {
   if (!error) return null;
   const kind = typeof error.kind === "string" && ERROR_KIND_SET.has(error.kind) ? error.kind : "app";
   const out: Record<string, unknown> = { kind };
@@ -254,7 +305,7 @@ function buildError(error: GenerationError | null): Record<string, unknown> | nu
   return out;
 }
 
-function deriveStopKind(outcome: ProviderOutcome | null): string | null {
+function deriveStopKind(outcome: ResultLike | null): string | null {
   if (!outcome) return null;
   if (outcome.stopKind !== null && outcome.stopKind !== undefined) {
     return normalizeStopKind(outcome.stopKind);
@@ -266,11 +317,50 @@ function deriveStopKind(outcome: ProviderOutcome | null): string | null {
 }
 
 /** The SDK omits a top-level key whose value is null; nested nulls inside `usage` are sent. */
-function dropNullKeys(record: GenerationRecord): GenerationRecord {
-  const out: GenerationRecord = {};
+function dropNullKeys(record: LogRecord): LogRecord {
+  const out: LogRecord = {};
   for (const [key, value] of Object.entries(record)) {
     if (value === null || value === undefined) continue;
     out[key] = value;
   }
   return out;
+}
+
+function get(value: unknown, key: string): unknown {
+  if (value && typeof value === "object" && key in value) {
+    return (value as Record<string, unknown>)[key];
+  }
+  return undefined;
+}
+
+function first(value: unknown): unknown {
+  return Array.isArray(value) && value.length > 0 ? value[0] : undefined;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function arrayOrNull(value: unknown): unknown[] | null {
+  return Array.isArray(value) ? value : null;
+}
+
+function anthropicContent(content: unknown): string | null {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  const parts = content
+    .map((block) => {
+      if (!block || typeof block !== "object") return null;
+      const record = block as Record<string, unknown>;
+      return (record["type"] === undefined || record["type"] === "text") &&
+        typeof record["text"] === "string"
+        ? record["text"]
+        : null;
+    })
+    .filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join("") : null;
 }

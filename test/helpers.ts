@@ -6,13 +6,13 @@ import type { AddressInfo } from "node:net";
 
 import type { Logger } from "../src/index.js";
 
-/** A snapshot document in the shape `GET /snapshot` returns, small enough to read in a test. */
+/** A snapshot document in the shape `GET /use-cases` returns, small enough to read in a test. */
 export function snapshotDocument(
   environment = "production",
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    schema_version: 3,
+    schema_version: 4,
     project: "sdkfixture",
     environment,
     use_cases: {

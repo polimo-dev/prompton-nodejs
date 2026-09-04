@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { decodeSnapshotJson, type SnapshotData } from "./snapshotData.js";
+import { decodeUseCaseDocumentJson, type UseCaseDocument } from "./snapshotData.js";
 import type { ResolutionSource } from "./resolver.js";
 import type { Logger } from "./logger.js";
 
@@ -11,8 +11,8 @@ import type { Logger } from "./logger.js";
  */
 
 /** One snapshot, and where it came from. */
-export interface SnapshotEntry {
-  data: SnapshotData;
+export interface UseCaseDocumentEntry {
+  data: UseCaseDocument;
   /** The bytes the server sent, kept verbatim so the disk mirror and the export match the ETag. */
   raw: string;
   etag: string | null;
@@ -23,8 +23,8 @@ export interface SnapshotEntry {
   staleSince: number | null;
 }
 
-/** What `snapshotInfo()` reports. */
-export interface SnapshotInfo {
+/** What `useCasesInfo()` reports. */
+export interface UseCasesInfo {
   etag: string | null;
   lastModified: string | null;
   source: ResolutionSource | "none";
@@ -46,13 +46,13 @@ interface Sidecar {
 
 /** In-memory holder of the current snapshot. */
 export class SnapshotStore {
-  private entry: SnapshotEntry | null = null;
+  private entry: UseCaseDocumentEntry | null = null;
 
-  get(): SnapshotEntry | null {
+  get(): UseCaseDocumentEntry | null {
     return this.entry;
   }
 
-  set(entry: SnapshotEntry): void {
+  set(entry: UseCaseDocumentEntry): void {
     this.entry = entry;
   }
 
@@ -72,7 +72,7 @@ export class SnapshotStore {
     }
   }
 
-  info(): SnapshotInfo {
+  info(): UseCasesInfo {
     const entry = this.entry;
     if (!entry) {
       return {
@@ -110,7 +110,7 @@ export type LoadFailure =
   | { kind: "project_mismatch"; found: string | null; expected: string };
 
 /** The outcome of reading a snapshot file. */
-export type LoadResult = { ok: true; entry: SnapshotEntry } | { ok: false; failure: LoadFailure };
+export type LoadResult = { ok: true; entry: UseCaseDocumentEntry } | { ok: false; failure: LoadFailure };
 
 /**
  * Reads a snapshot file and its sidecar.
@@ -118,7 +118,7 @@ export type LoadResult = { ok: true; entry: SnapshotEntry } | { ok: false; failu
  * A document for another environment or another project is never used: a staging process must not
  * boot on a production bundle. A corrupt or half-written file is ignored, not an error.
  */
-export function loadSnapshotFile(
+export function loadUseCaseDocumentFile(
   path: string,
   source: ResolutionSource,
   environment: string,
@@ -135,7 +135,7 @@ export function loadSnapshotFile(
 
   let decoded;
   try {
-    decoded = decodeSnapshotJson(raw);
+    decoded = decodeUseCaseDocumentJson(raw);
   } catch (error) {
     return { ok: false, failure: { kind: "invalid", message: (error as Error).message } };
   }
@@ -181,7 +181,7 @@ export function sidecarPath(path: string): string {
  * rename. Several processes on one host may share the file; a reader either sees the old inode or
  * the new one, never a half-written body.
  */
-export function writeSnapshotFile(
+export function writeUseCaseDocumentFile(
   path: string,
   raw: string,
   sidecar: Sidecar,
@@ -237,13 +237,13 @@ export function loadLocalSnapshot(
   environment: string,
   project: string | null,
   logger: Logger,
-): SnapshotEntry | null {
+): UseCaseDocumentEntry | null {
   const candidates: [string, ResolutionSource][] = [];
   if (diskCachePath) candidates.push([diskCachePath, "disk"]);
   if (bundlePath) candidates.push([bundlePath, "bundle"]);
 
   for (const [path, source] of candidates) {
-    const result = loadSnapshotFile(path, source, environment, project);
+    const result = loadUseCaseDocumentFile(path, source, environment, project);
     if (result.ok) {
       logger.info(`loaded snapshot from ${source} (${path})`);
       return result.entry;

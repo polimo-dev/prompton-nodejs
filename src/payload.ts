@@ -14,8 +14,8 @@ import type { Logger } from "./logger.js";
  * redaction hook last.
  */
 
-/** A record in the shape `POST /generations` accepts. */
-export type GenerationRecord = Record<string, unknown>;
+/** A record in the shape `POST /logs` accepts. */
+export type LogRecord = Record<string, unknown>;
 
 /** The three knobs of a payload policy. */
 export interface PolicyInput {
@@ -35,14 +35,14 @@ export interface NormalizedPolicy {
 export interface PayloadOptions {
   payloadDefaults?: Partial<NormalizedPolicy>;
   hashEndUser?: boolean;
-  redact?: ((record: GenerationRecord) => GenerationRecord | null | undefined) | null;
+  redact?: ((record: LogRecord) => LogRecord | null | undefined) | null;
   logger?: Logger;
 }
 
 const ERROR_MESSAGE_MAX = 2048;
 const SAMPLE_SCALE = 10000;
 
-/** The policy used when neither the snapshot nor the app supplies one. */
+/** The policy used when neither the use-case document nor the app supplies one. */
 export const DEFAULT_POLICY: NormalizedPolicy = {
   mode: "full",
   sampleRate: 1.0,
@@ -51,10 +51,10 @@ export const DEFAULT_POLICY: NormalizedPolicy = {
 
 /** Applies the payload policy to one record and returns the record to send. */
 export function applyPayloadPolicy(
-  record: GenerationRecord,
+  record: LogRecord,
   policy: PolicyInput | PayloadPolicy | null | undefined,
   options: PayloadOptions = {},
-): GenerationRecord {
+): LogRecord {
   const normalized = normalizePolicy(policy, options.payloadDefaults);
   let out = applyMode({ ...record }, normalized);
   out = capErrorMessage(out);
@@ -85,7 +85,7 @@ export function normalizePolicy(
  * text of. Otherwise the decision is a pure function of the id, so a resend decides the same way
  * and the server reaches the same answer independently.
  */
-export function keepPayload(record: GenerationRecord, sampleRate: number): boolean {
+export function keepPayload(record: LogRecord, sampleRate: number): boolean {
   if (asText(record["status"]) === "error") return true;
   if (asText(record["stop_kind"]) === "length") return true;
   if (sampleRate >= 1.0) return true;
@@ -104,28 +104,28 @@ export function sampleBucket(id: string): number {
 // ---------------------------------------------------------------------------
 // mode
 
-function applyMode(record: GenerationRecord, policy: NormalizedPolicy): GenerationRecord {
+function applyMode(record: LogRecord, policy: NormalizedPolicy): LogRecord {
   if (policy.mode === "none") return dropPayload(record);
   if (!keepPayload(record, policy.sampleRate)) return dropPayload(record);
   const wrapped = wrapPayload(record);
   return policy.mode === "hash" ? hashPayload(wrapped) : truncatePayload(wrapped, policy.maxBytes);
 }
 
-function dropPayload(record: GenerationRecord): GenerationRecord {
+function dropPayload(record: LogRecord): LogRecord {
   const out = { ...record };
   delete out["input"];
   delete out["output"];
   return out;
 }
 
-function wrapPayload(record: GenerationRecord): GenerationRecord {
+function wrapPayload(record: LogRecord): LogRecord {
   const out = { ...record };
   if (typeof out["input"] === "string") out["input"] = { text: out["input"] };
   if (typeof out["output"] === "string") out["output"] = { content: out["output"] };
   return out;
 }
 
-function hashPayload(record: GenerationRecord): GenerationRecord {
+function hashPayload(record: LogRecord): LogRecord {
   const out = { ...record };
   for (const key of ["input", "output"] as const) {
     const value = out[key];
@@ -139,7 +139,7 @@ function hashPayload(record: GenerationRecord): GenerationRecord {
 // ---------------------------------------------------------------------------
 // full mode: truncation
 
-function truncatePayload(record: GenerationRecord, maxBytes: number): GenerationRecord {
+function truncatePayload(record: LogRecord, maxBytes: number): LogRecord {
   const out = { ...record };
   if ("input" in out) {
     const truncated = truncateInput(out["input"], maxBytes);
@@ -417,7 +417,7 @@ function trimLeadingPartial(buffer: Buffer): string {
 // ---------------------------------------------------------------------------
 // tail of the pipeline
 
-function capErrorMessage(record: GenerationRecord): GenerationRecord {
+function capErrorMessage(record: LogRecord): LogRecord {
   const error = record["error"];
   if (!isRecord(error)) return record;
   const message = error["message"];
@@ -426,14 +426,14 @@ function capErrorMessage(record: GenerationRecord): GenerationRecord {
   return { ...record, error: { ...error, message: capped } };
 }
 
-function hashEndUserRef(record: GenerationRecord, enabled: boolean): GenerationRecord {
+function hashEndUserRef(record: LogRecord, enabled: boolean): LogRecord {
   if (!enabled) return record;
   const ref = record["end_user_ref"];
   if (ref === null || ref === undefined) return record;
   return { ...record, end_user_ref: sha256Hex(textOf(ref)) };
 }
 
-function redact(record: GenerationRecord, options: PayloadOptions): GenerationRecord {
+function redact(record: LogRecord, options: PayloadOptions): LogRecord {
   const hook = options.redact;
   if (typeof hook !== "function") return record;
   try {

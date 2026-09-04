@@ -6,16 +6,13 @@ import {
   ALLOWED_FILTERS,
   ALLOWED_TAGS,
   applyPayloadPolicy,
-  DEFAULT_PROMPT,
-  decodeSnapshot,
+  decodeUseCaseDocument,
   isTruncatedStop,
   lint,
   MissingVariableError,
   normalizeStopKind,
-  promptNamesFromSnapshot,
   render,
   renderMessages,
-  resolveFromSnapshot,
   sampleBucket,
   SCHEMA_VERSION,
   templateVariables,
@@ -27,8 +24,9 @@ import {
   canonicalJson,
   type Engine,
   type Message,
-  type SnapshotData,
+  type UseCaseDocument,
 } from "../src/index.js";
+import { DEFAULT_PROMPT, promptNamesFromSnapshot, resolveFromSnapshot } from "../src/resolver.js";
 
 /**
  * The cross-language conformance suite, copied verbatim from the reference implementation
@@ -132,28 +130,46 @@ describe("template.json", () => {
 });
 
 // ---------------------------------------------------------------------------
-// resolve.json
+// use_case.json
 
-describe("resolve.json", () => {
-  const doc = load("resolve.json");
-  const snapshots = new Map<string, SnapshotData>();
-  for (const [ref, raw] of Object.entries(doc["snapshots"] as Record<string, unknown>)) {
-    snapshots.set(ref, decodeSnapshot(raw).data);
+describe("use_case.json", () => {
+  const doc = load("use_case.json");
+  const documents = new Map<string, UseCaseDocument>();
+  for (const [ref, raw] of Object.entries(doc["documents"] as Record<string, unknown>)) {
+    documents.set(ref, decodeUseCaseDocument(raw).data);
   }
 
   it("names the same default prompt", () => {
     expect(doc["default_prompt"]).toBe(DEFAULT_PROMPT);
   });
 
-  it("every snapshot decodes as schema v3", () => {
-    for (const data of snapshots.values()) {
+  it("every use-case document decodes as schema v4", () => {
+    for (const data of documents.values()) {
       expect(data.schemaVersion).toBe(SCHEMA_VERSION);
     }
   });
 
+  it("requires schema_version to be exactly integer 4", () => {
+    const base = doc["documents"]["production"] as Record<string, unknown>;
+    for (const patch of [
+      { schema_version: 3 },
+      { schema_version: 5 },
+      { schema_version: "4" },
+      { schema_version: undefined },
+    ]) {
+      const candidate = { ...base, ...patch };
+      if (patch.schema_version === undefined) delete candidate["schema_version"];
+      expect(() => decodeUseCaseDocument(candidate)).toThrow(/schema_version/u);
+    }
+
+    const legacy: Record<string, unknown> = { ...base, version: SCHEMA_VERSION };
+    delete legacy["schema_version"];
+    expect(() => decodeUseCaseDocument(legacy)).toThrow(/schema_version/u);
+  });
+
   for (const testCase of doc["cases"] as {
     name: string;
-    snapshot_ref: string;
+    document_ref: string;
     environment: string;
     use_case: string;
     prompt?: string;
@@ -161,7 +177,7 @@ describe("resolve.json", () => {
     expect: Record<string, unknown>;
   }[]) {
     it(testCase.name, () => {
-      const data = snapshots.get(testCase.snapshot_ref) as SnapshotData;
+      const data = documents.get(testCase.document_ref) as UseCaseDocument;
       expect(data.environment).toBe(testCase.environment);
       expect(resolveExpectation(data, testCase)).toEqual(testCase.expect);
     });
@@ -169,7 +185,7 @@ describe("resolve.json", () => {
 });
 
 function resolveExpectation(
-  data: SnapshotData,
+  data: UseCaseDocument,
   testCase: {
     use_case: string;
     prompt?: string;
@@ -183,11 +199,14 @@ function resolveExpectation(
     if (error instanceof UnknownPromptError) {
       return {
         error: "unknown_prompt",
+        key: error.useCase,
         prompt: error.prompt,
-        available_prompts: error.availablePrompts,
+        prompt_names: error.promptNames,
       };
     }
-    if (error instanceof UnknownUseCaseError) return { error: "unknown_use_case" };
+    if (error instanceof UnknownUseCaseError) {
+      return { error: "unknown_use_case", key: error.useCase };
+    }
     if (error instanceof UnresolvedError) return { error: "unresolved" };
     throw error;
   }
@@ -214,21 +233,23 @@ function resolveExpectation(
   }
 
   return {
+    key: resolution.useCase,
+    source: resolution.source,
     kind: resolution.kind,
     deployment_id: resolution.deploymentId,
     revision: resolution.deploymentRevision,
     prompt: resolution.prompt,
-    prompts: promptNamesFromSnapshot(data, testCase.use_case),
+    prompt_names: promptNamesFromSnapshot(data, testCase.use_case),
     model_id: resolution.modelId,
     model: resolution.model,
     provider: resolution.provider,
-    effective_params: resolution.params,
-    effective_provider_options: resolution.providerOptions,
+    params: resolution.params,
+    provider_options: resolution.providerOptions,
     prompt_version:
       resolution.promptVersionId === null
         ? null
         : { id: resolution.promptVersionId, number: resolution.promptVersionNumber },
-    warnings: resolution.warnings.map((w) => `${w.kind}: ${w.detail}`),
+    warnings: resolution.warnings.map((w: { kind: string; detail: unknown }) => `${w.kind}: ${String(w.detail)}`),
     ...rendered,
   };
 }
@@ -243,12 +264,12 @@ describe("truncation.json", () => {
     name: string;
     policy: { mode: string; sample_rate: number; max_bytes: number };
     config?: { hash_end_user?: boolean };
-    generation: Record<string, unknown>;
-    expect: { generation: Record<string, unknown> };
+    log: Record<string, unknown>;
+    expect: { log: Record<string, unknown> };
   }[]) {
     it(testCase.name, () => {
       const actual = applyPayloadPolicy(
-        testCase.generation,
+        testCase.log,
         {
           mode: testCase.policy.mode,
           sampleRate: testCase.policy.sample_rate,
@@ -256,7 +277,7 @@ describe("truncation.json", () => {
         },
         { hashEndUser: testCase.config?.hash_end_user === true },
       );
-      expect(actual).toEqual(testCase.expect.generation);
+      expect(actual).toEqual(testCase.expect.log);
     });
   }
 
@@ -270,18 +291,18 @@ describe("truncation.json", () => {
     for (const testCase of doc["cases"] as {
       name: string;
       policy: { max_bytes: number };
-      expect: { generation: Record<string, any> };
+      expect: { log: Record<string, any> };
     }[]) {
       const maxBytes = testCase.policy.max_bytes;
-      const generation = testCase.expect.generation;
-      for (const message of (generation["input"]?.["messages"] ?? []) as Record<string, unknown>[]) {
+      const log = testCase.expect.log;
+      for (const message of (log["input"]?.["messages"] ?? []) as Record<string, unknown>[]) {
         if (typeof message["content"] !== "string") continue;
         expect(Buffer.byteLength(message["content"], "utf8"), testCase.name).toBeLessThanOrEqual(
           Math.max(Math.trunc(maxBytes / 8), 64),
         );
         expect(Buffer.from(message["content"], "utf8").toString("utf8")).toBe(message["content"]);
       }
-      const content = generation["output"]?.["content"];
+      const content = log["output"]?.["content"];
       if (typeof content === "string") {
         expect(Buffer.byteLength(content, "utf8"), testCase.name).toBeLessThanOrEqual(
           Math.max(Math.trunc(maxBytes / 4), 64),
@@ -312,10 +333,10 @@ describe("stop_kind.json", () => {
 });
 
 // ---------------------------------------------------------------------------
-// generation_record.json
+// log_record.json
 
-describe("generation_record.json", () => {
-  const doc = load("generation_record.json");
+describe("log_record.json", () => {
+  const doc = load("log_record.json");
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
   const records = (doc["records"] as { name: string; record: Record<string, any> }[]).map(
     (entry) => entry,
@@ -336,7 +357,7 @@ describe("generation_record.json", () => {
       optionalEnum(record["kind"], ["chat", "text", "embedding"]);
       optionalEnum(record["provider"], ["openrouter", "groq", "openai", "anthropic", "google", "other"]);
       optionalEnum(record["stop_kind"], ["stop", "length", "tool_call", "content_filter", "other"]);
-      optionalEnum(record["resolution_source"], ["remote", "disk", "bundle", "manual"]);
+      optionalEnum(record["source"], ["remote", "disk", "bundle", "manual"]);
       optionalEnum(record["usage"]?.["cost_source"], ["provider", "catalog", "unknown"]);
 
       for (const key of ["deployment_id", "prompt_version_id", "model_id"]) {
@@ -362,7 +383,7 @@ describe("generation_record.json", () => {
       ).toBeLessThanOrEqual(16384);
 
       const json = JSON.stringify(record);
-      expect(json.includes(" ")).toBe(false);
+      expect(json.includes(String.fromCharCode(0))).toBe(false);
     });
 
     it(`${name} passes through the payload policy unchanged`, () => {
@@ -374,7 +395,7 @@ describe("generation_record.json", () => {
 
   it("the batch envelope holds exactly the documented records", () => {
     const bare = records.map((entry) => entry.record);
-    expect(doc["batch_envelope"]["request"]["generations"]).toEqual(bare);
+    expect(doc["batch_envelope"]["request"]["logs"]).toEqual(bare);
     expect(doc["batch_envelope"]["response_example"]["accepted"]).toBe(bare.length);
     expect(doc["batch_envelope"]["response_on_resend"]["duplicates"]).toBe(bare.length);
     expect(bare.length).toBeLessThanOrEqual(doc["endpoint"]["max_records_per_request"]);
@@ -384,10 +405,10 @@ describe("generation_record.json", () => {
 describe("every fixture", () => {
   for (const name of [
     "template.json",
-    "resolve.json",
+    "use_case.json",
     "truncation.json",
     "stop_kind.json",
-    "generation_record.json",
+    "log_record.json",
   ]) {
     it(`${name} is format version 1 and names itself`, () => {
       const doc = load(name);

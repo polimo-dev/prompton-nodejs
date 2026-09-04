@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "project": "sdkfixture",
   "environment": "production",
   "use_cases": {

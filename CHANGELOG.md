@@ -4,19 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.2.0
+
+### Changed
+
+- Breaking rename to the final PromptOn runtime vocabulary: `useCase()` returns a `UseCase` with
+  `.messages()`, `.text()` and `.track()` helpers, and `Result.fromOpenAI()` /
+  `Result.fromAnthropic()` extract provider outputs.
+- Runtime HTTP paths now use `GET /api/v1/use-cases`, `POST /api/v1/use-cases/{key}/prompt`, and
+  `POST /api/v1/logs` with the `{"logs": [...]}` envelope.
+- Public record/document fields now use `params`, `providerOptions`, `source`, schema version 4,
+  and the default bundle filename `use-cases.production.json`.
+- Conformance fixtures were renamed from `resolve.json` / `LLM call_record.json` to
+  `use_case.json` / `log_record.json`.
 
 ### Fixed
 
-- `resolveRemote()` now honours the rate-limit rule. A `429`, a `5xx` or an unreachable server
+- `filledPrompt()` now honours the rate-limit rule. A `429`, a `5xx` or an unreachable server
   pauses that `(use case, prompt, environment)` key until `Retry-After` — falling back to
   `error.details.retry_after`, then to an exponential backoff ×2 from the cache TTL capped at five
-  minutes — instead of re-issuing `POST /resolve` on every single call. The cached answer keeps
+  minutes — instead of re-issuing the prompt endpoint on every single call. The cached answer keeps
   being served throughout; with nothing cached, the calls inside the pause raise the original error
   without touching the network. Concurrent calls for one key now share a single in-flight request.
 - `log()` never throws. A record the server would reject is dropped, counted in the new
-  `stats().droppedInvalid` and warned about once, rather than turning a successful generation into
-  a failed request; `withGeneration()`'s logging half does the same, so it can never replace the
+  `stats().droppedInvalid` and warned about once, rather than turning a successful LLM call into
+  a failed request; `UseCase.track()`'s logging half does the same, so it can never replace the
   provider's own error with one of its own.
 - A git install now yields an importable package: `dist/` is not committed, and the package had no
   `prepare` script to build it. `npm run check:install` is a new gate that installs from the
@@ -45,7 +57,7 @@ Initial release: the official PromptOn SDK for Node.js and TypeScript.
   sidecar, and a bundled file — plus a 10-second cache, `If-None-Match` polling,
   stale-while-revalidate refresh, `Retry-After` handling on `429`, exponential backoff on `5xx` and
   transport failures, and environment and project guards. No external store is ever required.
-- Local resolver for snapshot schema v3: `unknown_use_case`, `unresolved` and `unknown_prompt`
+- Local resolver for use-case document schema v3: `unknown_use_case`, `unresolved` and `unknown_prompt`
   errors, shallow parameter merges, and no silent fallback to the `default` prompt.
 - Template engine for the Liquid subset PromptOn allows, plus `lint()` and `templateVariables()`.
 - Monitoring-log buffer: app-generated UUIDv7 ids, size/time/byte flush triggers, batches of at most
@@ -53,8 +65,8 @@ Initial release: the official PromptOn SDK for Node.js and TypeScript.
   `413` splitting, drop-on-other-`4xx`, a bounded queue that drops the oldest, and a flush on exit.
 - Payload policy applied before enqueue: sampling, `none`/`hash`/`full` modes, UTF-8-safe
   truncation, the `error.message` cap, `end_user_ref` hashing and a redaction hook.
-- `withGeneration()` wrapper, `log()`, `flush()`, `resolveRemote()` (`POST /resolve` with the same
-  caching rules), `exportSnapshot()`, `snapshotInfo()` and `stats()`.
+- Tracking wrapper, `log()`, `flush()`, `filledPrompt()` (`POST /api/v1/use-cases/{key}/prompt` with the same
+  caching rules), `exportUseCases()`, `useCasesInfo()` and `stats()`.
 - Test mode (no HTTP, records captured) and offline mode (disk and bundle only).
 - The cross-language conformance suite, executed case by case, and an env-gated live integration
   test.

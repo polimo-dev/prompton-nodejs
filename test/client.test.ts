@@ -30,7 +30,7 @@ function make(options: ConstructorParameters<typeof PromptOn>[0] = {}): PromptOn
 
 function loaded(options: ConstructorParameters<typeof PromptOn>[0] = {}): PromptOn {
   const client = make({ mode: "test", ...options });
-  client.loadSnapshot(snapshotDocument());
+  client.loadUseCases(snapshotDocument());
   return client;
 }
 
@@ -41,21 +41,30 @@ afterEach(async () => {
 describe("resolution", () => {
   it("resolves a chat use case and renders it", () => {
     const client = loaded();
-    const resolution = client.resolve("greeting");
-    expect(resolution).toMatchObject({
-      useCase: "greeting",
+    const useCase = client.useCase("greeting");
+    expect({
+      key: useCase.key,
+      kind: useCase.kind,
+      prompt: useCase.prompt,
+      model: useCase.model,
+      provider: useCase.provider,
+      deployment: useCase.deployment,
+      source: useCase.source,
+      promptNames: useCase.promptNames,
+    }).toMatchObject({
+      key: "greeting",
       kind: "chat",
       prompt: "default",
       model: "openai/gpt-4o-mini",
       provider: "openrouter",
-      deploymentRevision: 3,
+      deployment: { revision: 3 },
       source: "manual",
-      availablePrompts: ["default", "ko"],
+      promptNames: ["default", "ko"],
     });
-    expect(resolution.params).toEqual({ temperature: 0.2, max_tokens: 512 });
-    expect(resolution.providerOptions).toEqual({ only: ["OpenAI"] });
+    expect(useCase.params).toEqual({ temperature: 0.2, max_tokens: 512 });
+    expect(useCase.providerOptions).toEqual({ only: ["OpenAI"] });
 
-    const messages = client.renderChat(resolution, { name: "Ada" });
+    const messages = useCase.messages({ name: "Ada" });
     expect(messages).toEqual([
       { role: "system", content: "You are a friendly greeter." },
       { role: "user", content: "Say hello to Ada." },
@@ -64,30 +73,59 @@ describe("resolution", () => {
 
   it("selects a prompt by name", () => {
     const client = loaded();
-    const messages = client.renderChat(client.resolve("greeting", { prompt: "ko" }), {
+    const messages = client.useCase("greeting", { prompt: "ko" }).messages({
       name: "아다",
     });
     expect((messages[1] as Message).content).toBe("아다님에게 인사해줘.");
   });
 
+  it("uses the prompt selected during render as the following track evidence", async () => {
+    const client = loaded();
+    const useCase = client.useCase("greeting");
+
+    expect(useCase.messages({ name: "아다" }, { prompt: "ko" })[1]?.content).toBe(
+      "아다님에게 인사해줘.",
+    );
+    await useCase.track(() => ({ content: "안녕", finishReason: "stop" }));
+
+    expect(client.logs[0]).toMatchObject({
+      prompt: "ko",
+      prompt_version_id: "0198f2a1-0000-7000-8000-00000000a002",
+    });
+  });
+
+  it("does not let a failed named-prompt render poison following track evidence", async () => {
+    const client = loaded();
+    const useCase = client.useCase("greeting");
+
+    expect(() => useCase.messages({}, { prompt: "ko" })).toThrowError(MissingVariableError);
+    await useCase.track(() => ({ content: "Hello", finishReason: "stop" }));
+
+    expect(useCase.prompt).toBe("default");
+    expect(client.logs[0]).toMatchObject({
+      prompt: "default",
+      prompt_version_id: "0198f2a1-0000-7000-8000-00000000a001",
+    });
+  });
+
   it("renders a text use case", () => {
     const client = loaded();
-    const text = client.renderText(client.resolve("summarize"), { items: ["a", "b"] });
+    const text = client.useCase("summarize").text({ items: ["a", "b"] });
     expect(text).toBe("Summarize:\n- a\n- b\n");
   });
 
   it("has no template for an embedding use case", () => {
     const client = loaded();
-    const resolution = client.resolve("embed");
-    expect(resolution.prompt).toBeNull();
-    expect(resolution.promptVersionId).toBeNull();
-    expect(() => client.render(resolution)).toThrowError(NoTemplateError);
+    const useCase = client.useCase("embed");
+    expect(useCase.prompt).toBeNull();
+    expect(useCase.promptVersion).toBeNull();
+    expect(() => useCase.messages()).toThrowError(NoTemplateError);
   });
 
   it("reports a missing variable by name", () => {
     const client = loaded();
     try {
-      client.renderChat(client.resolve("greeting"), {});
+      client.useCase("greeting").messages({});
       expect.unreachable("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(MissingVariableError);
@@ -98,18 +136,18 @@ describe("resolution", () => {
   it("refuses an unpinned prompt name rather than falling back to default", () => {
     const client = loaded();
     try {
-      client.resolve("greeting", { prompt: "fr" });
+      client.useCase("greeting", { prompt: "fr" });
       expect.unreachable("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(UnknownPromptError);
-      expect((error as UnknownPromptError).availablePrompts).toEqual(["default", "ko"]);
+      expect((error as UnknownPromptError).promptNames).toEqual(["default", "ko"]);
     }
   });
 
   it("distinguishes an unknown use case from one that is not deployed", () => {
     const client = loaded();
-    expect(() => client.resolve("nope")).toThrowError(UnknownUseCaseError);
-    expect(() => client.resolve("draft")).toThrowError(UnresolvedError);
+    expect(() => client.useCase("nope")).toThrowError(UnknownUseCaseError);
+    expect(() => client.useCase("draft")).toThrowError(UnresolvedError);
   });
 
   it("lists the pinned prompt names", () => {
@@ -123,12 +161,11 @@ describe("test mode", () => {
   it("captures records instead of sending them, and makes no HTTP call", async () => {
     const fetch = fakeFetch(() => new Response("{}", { status: 200 }));
     const client = loaded({ apiKey: "ptn_k_1", baseUrl: "http://ptn.test", fetch });
-    const resolution = client.resolve("greeting");
+    const useCase = client.useCase("greeting");
 
-    await client.withGeneration(
-      resolution,
-      { variables: { name: "Ada" }, endUserRef: "u_1", traceId: "job:1" },
+    await useCase.track(
       () => ({ content: "Hello, Ada!", finishReason: "stop", usage: { inputTokens: 8, outputTokens: 4 } }),
+      { variables: { name: "Ada" }, endUserRef: "u_1", traceId: "job:1" },
     );
 
     expect(fetch.calls.length).toBe(0);
@@ -142,10 +179,10 @@ describe("test mode", () => {
       stop_kind: "stop",
       deployment_revision: 3,
       prompt: "default",
-      resolution_source: "manual",
+      source: "manual",
       trace_id: "job:1",
       end_user_ref: "u_1",
-      sdk: { name: "prompton-nodejs", version: "0.1.0" },
+      sdk: { name: "prompton-nodejs", version: "0.2.0" },
     });
     expect(log["output"]).toEqual({ content: "Hello, Ada!" });
     expect(typeof log["latency_ms"]).toBe("number");
@@ -154,11 +191,11 @@ describe("test mode", () => {
 
   it("logs the failure and rethrows the original error unchanged", async () => {
     const client = loaded();
-    const resolution = client.resolve("greeting");
+    const useCase = client.useCase("greeting");
     const boom = Object.assign(new Error("rate limited by upstream"), { status: 429 });
 
     await expect(
-      client.withGeneration(resolution, {}, () => {
+      useCase.track(() => {
         throw boom;
       }),
     ).rejects.toBe(boom);
@@ -175,14 +212,15 @@ describe("test mode", () => {
   it("returns the call's own value untouched", async () => {
     const client = loaded();
     const value = { content: "hi", extra: [1, 2, 3] };
-    const returned = await client.withGeneration(client.resolve("greeting"), {}, () => value);
+    const returned = await client.useCase("greeting").track(() => value);
     expect(returned).toBe(value);
   });
 
   it("never lets a broken record replace the provider's own error", async () => {
     const logger = recordingLogger();
     const client = loaded({ logger, strictRecords: true });
-    const resolution = client.resolve("greeting");
+    const resolution = (client.useCase("greeting") as unknown as { currentResolution: object })
+      .currentResolution;
     const poisoned = Object.create(Object.getPrototypeOf(resolution) as object, {
       ...Object.getOwnPropertyDescriptors(resolution),
       params: {
@@ -194,7 +232,13 @@ describe("test mode", () => {
     const boom = new Error("the provider is down");
 
     await expect(
-      client.withGeneration(poisoned, {}, () => {
+      (
+        client as unknown as {
+          trackUseCase: typeof poisoned extends never
+            ? never
+            : (current: typeof poisoned, meta: object, call: () => never) => Promise<never>;
+        }
+      ).trackUseCase(poisoned, {}, () => {
         throw boom;
       }),
     ).rejects.toBe(boom);
@@ -205,7 +249,8 @@ describe("test mode", () => {
 
   it("never lets a broken record fail a successful call", async () => {
     const client = loaded({ strictRecords: true });
-    const resolution = client.resolve("greeting");
+    const resolution = (client.useCase("greeting") as unknown as { currentResolution: object })
+      .currentResolution;
     const poisoned = Object.create(Object.getPrototypeOf(resolution) as object, {
       ...Object.getOwnPropertyDescriptors(resolution),
       params: {
@@ -215,7 +260,13 @@ describe("test mode", () => {
       },
     }) as typeof resolution;
 
-    await expect(client.withGeneration(poisoned, {}, () => "fine")).resolves.toBe("fine");
+    await expect(
+      (
+        client as unknown as {
+          trackUseCase: (current: typeof poisoned, meta: object, call: () => string) => Promise<string>;
+        }
+      ).trackUseCase(poisoned, {}, () => "fine"),
+    ).resolves.toBe("fine");
     expect(client.stats().droppedInvalid).toBe(1);
   });
 });
@@ -227,13 +278,13 @@ describe("log()", () => {
     const log = client.logs[0] as Record<string, unknown>;
     expect(String(log["id"])).toMatch(/^[0-9a-f-]{36}$/u);
     expect(typeof log["started_at"]).toBe("string");
-    expect(log["sdk"]).toEqual({ name: "prompton-nodejs", version: "0.1.0" });
+    expect(log["sdk"]).toEqual({ name: "prompton-nodejs", version: "0.2.0" });
   });
 
-  it("fills the resolution evidence when a resolution is passed", () => {
+  it("fills the use-case evidence when a use case is passed", () => {
     const client = loaded();
-    const resolution = client.resolve("greeting", { prompt: "ko" });
-    client.log({ status: "ok" }, { resolution });
+    const useCase = client.useCase("greeting", { prompt: "ko" });
+    client.log({ status: "ok" }, { useCase });
     expect(client.logs[0]).toMatchObject({
       use_case: "greeting",
       model: "openai/gpt-4o-mini",
@@ -242,7 +293,7 @@ describe("log()", () => {
       deployment_revision: 3,
       prompt_version_id: "0198f2a1-0000-7000-8000-00000000a002",
       model_id: "0198f2a1-0000-7000-8000-00000000e001",
-      resolution_source: "manual",
+      source: "manual",
     });
   });
 
@@ -269,7 +320,7 @@ describe("log()", () => {
       sample_rate: 1.0,
       max_bytes: 262144,
     };
-    client.loadSnapshot(document);
+    client.loadUseCases(document);
     client.log({
       use_case: "greeting",
       model: "m",
@@ -294,9 +345,9 @@ describe("log()", () => {
 });
 
 describe("sending monitoring logs", () => {
-  it("posts one batch per environment to /generations", async () => {
+  it("posts one batch per environment to /logs", async () => {
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (url.includes("/use-cases")) return snapshotResponse(snapshotDocument());
       return new Response(JSON.stringify({ accepted: 1, duplicates: 0, rejected: [] }), {
         status: 202,
       });
@@ -307,26 +358,26 @@ describe("sending monitoring logs", () => {
       fetch,
       environment: "staging",
     });
-    client.loadSnapshot(snapshotDocument("staging"));
+    client.loadUseCases(snapshotDocument("staging"));
     client.log({ use_case: "greeting", model: "m", status: "ok" });
     const result = await client.flush(2000);
 
-    const post = fetch.calls.find((call) => call.url.includes("/generations"));
-    expect(post?.url).toBe("http://ptn.test/api/v1/generations?environment=staging");
+    const post = fetch.calls.find((call) => call.url.includes("/logs"));
+    expect(post?.url).toBe("http://ptn.test/api/v1/logs?environment=staging");
     expect((post?.init?.headers as Record<string, string>)["authorization"]).toBe(
       "Bearer ptn_sdkfixture_key",
     );
     expect((post?.init?.headers as Record<string, string>)["user-agent"]).toMatch(
       /^prompton-nodejs\/\d+\.\d+\.\d+$/u,
     );
-    const body = JSON.parse(post?.init?.body as string) as { generations: unknown[] };
-    expect(body.generations.length).toBe(1);
+    const body = JSON.parse(post?.init?.body as string) as { logs: unknown[] };
+    expect(body.logs.length).toBe(1);
     expect(result.accepted).toBe(1);
   });
 
   it("counts duplicates on a resend", async () => {
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (url.includes("/use-cases")) return snapshotResponse(snapshotDocument());
       return new Response(JSON.stringify({ accepted: 0, duplicates: 1, rejected: [] }), {
         status: 202,
       });
@@ -339,7 +390,7 @@ describe("sending monitoring logs", () => {
 
   it("does not retry a 403", async () => {
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (url.includes("/use-cases")) return snapshotResponse(snapshotDocument());
       return new Response(
         JSON.stringify({ error: { code: "forbidden", message: "API key lacks the logs scope" } }),
         { status: 403 },
@@ -350,14 +401,14 @@ describe("sending monitoring logs", () => {
     client.log({ use_case: "greeting", model: "m", status: "ok" });
     const result = await client.flush(2000);
 
-    expect(fetch.calls.filter((call) => call.url.includes("/generations")).length).toBe(1);
+    expect(fetch.calls.filter((call) => call.url.includes("/logs")).length).toBe(1);
     expect(result.droppedRejected).toBe(1);
     expect(logger.lines.join("\n")).toMatch(/lacks the logs scope/u);
   });
 
   it("flushes what is queued when the client is closed", async () => {
     const fetch = fakeFetch((url) => {
-      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      if (url.includes("/use-cases")) return snapshotResponse(snapshotDocument());
       return new Response(JSON.stringify({ accepted: 2, duplicates: 0, rejected: [] }), {
         status: 202,
       });
@@ -412,8 +463,8 @@ describe("offline mode", () => {
   it("makes no HTTP call at all", async () => {
     const fetch = fakeFetch(() => new Response("{}", { status: 200 }));
     const client = make({ mode: "offline", apiKey: "ptn_k_1", baseUrl: "http://ptn.test", fetch });
-    client.loadSnapshot(snapshotDocument());
-    expect(client.resolve("greeting").model).toBe("openai/gpt-4o-mini");
+    client.loadUseCases(snapshotDocument());
+    expect(client.useCase("greeting").model).toBe("openai/gpt-4o-mini");
     client.log({ use_case: "greeting", model: "m", status: "ok" });
     await client.flush(500);
     expect(fetch.calls.length).toBe(0);

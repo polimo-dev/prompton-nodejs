@@ -1,4 +1,4 @@
-import type { GenerationRecord } from "./payload.js";
+import type { LogRecord } from "./payload.js";
 import { throttled, type Logger } from "./logger.js";
 
 /**
@@ -19,15 +19,15 @@ export interface RejectedRecord {
   message?: string;
 }
 
-/** What one `POST /generations` did. */
-export type SendOutcome =
+/** What one `POST /logs` did. */
+export type SendResult =
   | { kind: "accepted"; accepted: number; duplicates: number; rejected: RejectedRecord[] }
   | { kind: "retry"; reason: string; retryInMs: number | null }
   | { kind: "too_large" }
   | { kind: "drop"; reason: string };
 
 /** Sends one batch. Supplied by the client so the buffer stays transport-agnostic. */
-export type Sender = (records: GenerationRecord[]) => Promise<SendOutcome>;
+export type Sender = (records: LogRecord[]) => Promise<SendResult>;
 
 /** Counters a caller can assert on. */
 export interface BufferStats {
@@ -62,7 +62,7 @@ export interface BufferOptions {
 }
 
 interface Entry {
-  record: GenerationRecord;
+  record: LogRecord;
   bytes: number;
 }
 
@@ -106,7 +106,7 @@ export class LogBuffer {
   }
 
   /** Queues one record. Returns immediately; the caller is never blocked and never fails. */
-  enqueue(record: GenerationRecord): void {
+  enqueue(record: LogRecord): void {
     if (this.closed) {
       this.quiet.warn("the client is closed; this monitoring log was not queued");
       return;
@@ -232,13 +232,13 @@ export class LogBuffer {
       const batch = this.take();
       if (batch.length === 0) return;
 
-      let outcome: SendOutcome;
+      let sendResult: SendResult;
       try {
-        outcome = await this.send(batch.map((entry) => entry.record));
+        sendResult = await this.send(batch.map((entry) => entry.record));
       } catch (error) {
-        outcome = { kind: "retry", reason: (error as Error).message, retryInMs: null };
+        sendResult = { kind: "retry", reason: (error as Error).message, retryInMs: null };
       }
-      const keepGoing = this.handle(batch, outcome);
+      const keepGoing = this.handle(batch, sendResult);
       if (!keepGoing && deadline === undefined) return;
     }
   }
@@ -262,18 +262,18 @@ export class LogBuffer {
   }
 
   /** Returns whether draining should carry straight on. */
-  private handle(batch: Entry[], outcome: SendOutcome): boolean {
-    switch (outcome.kind) {
+  private handle(batch: Entry[], sendResult: SendResult): boolean {
+    switch (sendResult.kind) {
       case "accepted": {
         this.attempts = 0;
         this.pausedUntil = 0;
         this.stats.sent += batch.length;
-        this.stats.accepted += outcome.accepted;
-        this.stats.duplicates += outcome.duplicates;
-        this.stats.rejected += outcome.rejected.length;
-        if (outcome.rejected.length > 0) {
+        this.stats.accepted += sendResult.accepted;
+        this.stats.duplicates += sendResult.duplicates;
+        this.stats.rejected += sendResult.rejected.length;
+        if (sendResult.rejected.length > 0) {
           this.logger.warn(
-            `${String(outcome.rejected.length)} monitoring log(s) rejected: ${summarise(outcome.rejected)}`,
+            `${String(sendResult.rejected.length)} monitoring log(s) rejected: ${summarise(sendResult.rejected)}`,
           );
         }
         return true;
@@ -294,7 +294,7 @@ export class LogBuffer {
       case "drop": {
         this.stats.droppedRejected += batch.length;
         this.quiet.error(
-          `dropping ${String(batch.length)} monitoring log(s): ${outcome.reason} — this is not retried`,
+          `dropping ${String(batch.length)} monitoring log(s): ${sendResult.reason} — this is not retried`,
         );
         return true;
       }
@@ -305,15 +305,15 @@ export class LogBuffer {
           this.attempts = 0;
           this.pausedUntil = 0;
           this.logger.error(
-            `dropping ${String(batch.length)} monitoring log(s) after ${String(this.options.maxAttempts)} attempts: ${outcome.reason}`,
+            `dropping ${String(batch.length)} monitoring log(s) after ${String(this.options.maxAttempts)} attempts: ${sendResult.reason}`,
           );
           return true;
         }
-        const wait = outcome.retryInMs ?? backoffMs(this.attempts);
+        const wait = sendResult.retryInMs ?? backoffMs(this.attempts);
         this.requeueFront(batch);
         this.pausedUntil = Date.now() + wait;
         this.quiet.warn(
-          `monitoring logs not sent (${outcome.reason}), retrying the same batch in ${String(Math.round(wait / 1000))}s`,
+          `monitoring logs not sent (${sendResult.reason}), retrying the same batch in ${String(Math.round(wait / 1000))}s`,
         );
         return false;
       }

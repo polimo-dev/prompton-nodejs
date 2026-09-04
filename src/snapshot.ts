@@ -1,10 +1,10 @@
 import type { ResolvedConfig } from "./config.js";
 import { errorMessage, request, retryAfterMs, TransportError } from "./http.js";
-import { decodeSnapshotJson } from "./snapshotData.js";
+import { decodeUseCaseDocumentJson } from "./snapshotData.js";
 import {
   loadLocalSnapshot,
-  writeSnapshotFile,
-  type SnapshotEntry,
+  writeUseCaseDocumentFile,
+  type UseCaseDocumentEntry,
   type SnapshotStore,
 } from "./store.js";
 import { throttled, type Logger } from "./logger.js";
@@ -52,7 +52,7 @@ export class SnapshotManager {
   }
 
   /** Reads the disk cache, then the bundle. Called once, synchronously, at construction. */
-  loadLocal(): SnapshotEntry | null {
+  loadLocal(): UseCaseDocumentEntry | null {
     const entry = loadLocalSnapshot(
       this.config.diskCachePath,
       this.config.bundlePath,
@@ -114,7 +114,7 @@ export class SnapshotManager {
   }
 
   /** Reloads the disk cache and bundle (offline refresh). */
-  reloadLocal(): SnapshotEntry | null {
+  reloadLocal(): UseCaseDocumentEntry | null {
     return this.loadLocal();
   }
 
@@ -126,7 +126,7 @@ export class SnapshotManager {
     try {
       const response = await request(this.config, {
         method: "GET",
-        path: "/snapshot",
+        path: "/use-cases",
         query: { environment: this.config.environment },
         headers,
         timeoutMs,
@@ -161,7 +161,7 @@ export class SnapshotManager {
   private install(raw: string, headers: Record<string, string>): RefreshResult {
     let decoded;
     try {
-      decoded = decodeSnapshotJson(raw);
+      decoded = decodeUseCaseDocumentJson(raw);
     } catch (error) {
       return this.fail(`could not decode the snapshot: ${(error as Error).message}`, this.backoffMs());
     }
@@ -176,7 +176,7 @@ export class SnapshotManager {
     }
 
     const etag = headers["etag"] ?? null;
-    const entry: SnapshotEntry = {
+    const entry: UseCaseDocumentEntry = {
       data: decoded.data,
       raw,
       etag,
@@ -195,11 +195,11 @@ export class SnapshotManager {
     return { status: "updated", etag };
   }
 
-  private mirrorToDisk(entry: SnapshotEntry): void {
+  private mirrorToDisk(entry: UseCaseDocumentEntry): void {
     const path = this.config.diskCachePath;
     if (!path) return;
     try {
-      writeSnapshotFile(path, entry.raw, {
+      writeUseCaseDocumentFile(path, entry.raw, {
         etag: entry.etag,
         last_modified: entry.lastModified,
         environment: entry.data.environment,

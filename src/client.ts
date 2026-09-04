@@ -14,50 +14,50 @@ import {
   type BufferStats,
   type FlushResult,
   type RejectedRecord,
-  type SendOutcome,
+  type SendResult,
 } from "./buffer.js";
 import {
   buildRecord,
   classifyError,
   completeRecord,
-  generationId,
-  type GenerationMeta,
-  type ProviderOutcome,
+  logId,
+  type LogMeta,
+  type ResultLike,
 } from "./generation.js";
-import { applyPayloadPolicy, type GenerationRecord } from "./payload.js";
+import { applyPayloadPolicy, type LogRecord } from "./payload.js";
 import {
   DEFAULT_PROMPT,
   promptNamesFromSnapshot,
   resolveFromSnapshot,
   type Resolution,
 } from "./resolver.js";
-import { decodeSnapshot, type PayloadPolicy } from "./snapshotData.js";
+import { decodeUseCaseDocument, type PayloadPolicy } from "./snapshotData.js";
 import { SnapshotManager, type RefreshResult } from "./snapshot.js";
-import { SnapshotStore, writeSnapshotFile, type SnapshotInfo } from "./store.js";
+import { SnapshotStore, writeUseCaseDocumentFile, type UseCasesInfo } from "./store.js";
 import { render as renderTemplate, renderMessages, type Message } from "./template.js";
 import { textOf } from "./json.js";
 import { throttled, type Logger } from "./logger.js";
 import { VERSION } from "./version.js";
 
-/** Options for {@link PromptOn.resolve}. */
-export interface ResolveOptions {
+/** Options for {@link PromptOn.useCase}. */
+export interface UseCaseOptions {
   /** Which prompt name to use. Default `default`. */
   prompt?: string;
 }
 
-/** Options for {@link PromptOn.resolveRemote}. */
-export interface RemoteResolveOptions extends ResolveOptions {
+/** Options for {@link PromptOn.filledPrompt}. */
+export interface FilledPromptOptions extends UseCaseOptions {
   /** Variables to render the pinned prompt with, locally. */
   variables?: Record<string, unknown> | null;
 }
 
-/** What `POST /resolve` answered, plus the locally rendered prompt. */
-export interface RemoteResolution {
-  useCase: string;
+/** What the prompt endpoint answered, plus the locally rendered prompt. */
+export interface FilledPrompt {
+  key: string;
   kind: string;
   deployment: { id: string | null; revision: number | null };
   prompt: string | null;
-  prompts: string[];
+  promptNames: string[];
   modelId: string | null;
   model: string | null;
   provider: string | null;
@@ -68,14 +68,124 @@ export interface RemoteResolution {
   text: string | null;
   warnings: unknown[];
   etag: string | null;
+  source: string | null;
 }
 
 /** Options for {@link PromptOn.log}. */
 export interface LogOptions {
-  /** The resolution this generation used; fills in the deployment and prompt evidence. */
-  resolution?: Resolution | null;
-  /** Override the payload policy; by default the use case's policy from the snapshot is used. */
+  /** The use case this log used; fills in the deployment and prompt evidence. */
+  useCase?: UseCase | null;
+  /** Override the payload policy; by default the use case's policy from the document is used. */
   policy?: PayloadPolicy | null;
+}
+
+export class UseCase {
+  private currentResolution: Resolution;
+
+  constructor(
+    initial: Resolution,
+    private readonly selectPrompt: (prompt: string) => Resolution,
+    private readonly trackPrompt: <T>(
+      current: Resolution,
+      meta: LogMeta,
+      call: () => T | Promise<T>,
+      extractResult: (result: T) => ResultLike | null,
+    ) => Promise<T>,
+  ) {
+    this.currentResolution = initial;
+  }
+
+  get key(): string {
+    return this.currentResolution.useCase;
+  }
+
+  get kind(): string {
+    return this.currentResolution.kind;
+  }
+
+  get model(): string | null {
+    return this.currentResolution.model;
+  }
+
+  get modelId(): string | null {
+    return this.currentResolution.modelId;
+  }
+
+  get provider(): string | null {
+    return this.currentResolution.provider;
+  }
+
+  get params(): Record<string, unknown> {
+    return this.currentResolution.params;
+  }
+
+  get providerOptions(): Record<string, unknown> {
+    return this.currentResolution.providerOptions;
+  }
+
+  get deployment(): { id: string | null; revision: number | null } {
+    return {
+      id: this.currentResolution.deploymentId,
+      revision: this.currentResolution.deploymentRevision,
+    };
+  }
+
+  get prompt(): string | null {
+    return this.currentResolution.prompt;
+  }
+
+  get promptVersion(): { id: string; number: number | null } | null {
+    if (this.currentResolution.promptVersionId === null) return null;
+    return {
+      id: this.currentResolution.promptVersionId,
+      number: this.currentResolution.promptVersionNumber,
+    };
+  }
+
+  get promptNames(): string[] {
+    return this.currentResolution.availablePrompts;
+  }
+
+  get source(): Resolution["source"] {
+    return this.currentResolution.source;
+  }
+
+  messages(variables?: Record<string, unknown> | null, options: UseCaseOptions = {}): Message[] {
+    const resolution = this.selected(options.prompt);
+    if (resolution.kind !== "chat" || !resolution.messages) {
+      throw new NoTemplateError(resolution.useCase);
+    }
+    const messages = renderMessages(resolution.messages, variables ?? {}, resolution.engine ?? "liquid");
+    this.commit(resolution);
+    return messages;
+  }
+
+  text(variables?: Record<string, unknown> | null, options: UseCaseOptions = {}): string {
+    const resolution = this.selected(options.prompt);
+    if (resolution.kind !== "text" || typeof resolution.textTemplate !== "string") {
+      throw new NoTemplateError(resolution.useCase);
+    }
+    const text = renderTemplate(resolution.textTemplate, variables ?? {}, resolution.engine ?? "liquid");
+    this.commit(resolution);
+    return text;
+  }
+
+  track<T>(
+    call: () => T | Promise<T>,
+    meta: LogMeta = {},
+    extractResult: (result: T) => ResultLike | null = defaultResult,
+  ): Promise<T> {
+    return this.trackPrompt(this.currentResolution, meta, call, extractResult);
+  }
+
+  private selected(prompt?: string): Resolution {
+    if (prompt === undefined || prompt === this.currentResolution.prompt) return this.currentResolution;
+    return this.selectPrompt(prompt);
+  }
+
+  private commit(resolution: Resolution): void {
+    this.currentResolution = resolution;
+  }
 }
 
 /**
@@ -84,12 +194,12 @@ export interface LogOptions {
  * must not contact the server again.
  */
 interface ResolveState {
-  value: RemoteResolution | null;
+  value: FilledPrompt | null;
   fetchedAt: number;
   nextAllowedAt: number;
   failures: number;
   lastError: unknown;
-  inFlight: Promise<RemoteResolution> | null;
+  inFlight: Promise<FilledPrompt> | null;
 }
 
 /** Exponential backoff ×2 from the cache TTL, capped at five minutes. */
@@ -125,7 +235,7 @@ function removeExitFlusher(flush: () => void): void {
 /**
  * The SDK.
  *
- * One instance holds one environment's snapshot and one monitoring-log buffer. Construction is
+ * One instance holds one environment's use-case document and one monitoring-log buffer. Construction is
  * synchronous and never blocks: the disk cache and the bundle are read on the spot, and the first
  * network fetch happens in the background.
  */
@@ -139,7 +249,7 @@ export class PromptOn {
   private readonly snapshots: SnapshotManager;
   private readonly buffer: LogBuffer;
   private readonly resolveCache = new Map<string, ResolveState>();
-  private readonly captured: GenerationRecord[] = [];
+  private readonly captured: LogRecord[] = [];
   private readonly quiet: Logger;
   private readyPromise: Promise<RefreshResult> | null = null;
   private exitHandler: (() => void) | null = null;
@@ -158,7 +268,7 @@ export class PromptOn {
 
     if (this.config.mode === "live" && this.config.apiKey === null) {
       this.config.logger.warn(
-        "no API key (set PTN_API_KEY or pass apiKey): running from the disk cache and the bundled snapshot only, with no remote calls",
+        "no API key (set PTN_API_KEY or pass apiKey): running from the disk cache and the bundled use-case document only, with no remote calls",
       );
     }
 
@@ -182,7 +292,7 @@ export class PromptOn {
   // configuration
 
   /**
-   * Waits for the first snapshot fetch to finish. Optional — resolution works from the disk cache
+   * Waits for the first use-case document fetch to finish. Optional — lookup works from the disk cache
    * or the bundle without it — but a short-lived script wants it.
    */
   async ready(): Promise<RefreshResult> {
@@ -193,21 +303,30 @@ export class PromptOn {
   }
 
   // -------------------------------------------------------------------------
-  // resolution
+  // use-case lookup
 
   /**
-   * Resolves a use case from the cached snapshot. Synchronous and allocation-cheap: this is the
+   * Resolves a use case from the cached use-case document. Synchronous and allocation-cheap: this is the
    * call that sits in the request path.
    *
    * Within the cache TTL nothing is fetched. Past it, a background refresh starts and this call
    * still answers from the document it already has.
    */
-  resolve(useCase: string, options: ResolveOptions = {}): Resolution {
+  useCase(useCase: string, options: UseCaseOptions = {}): UseCase {
+    return new UseCase(
+      this.useCaseFromDocument(useCase, options),
+      (prompt) => this.useCaseFromDocument(useCase, { prompt }),
+      (current, meta, call, extractResult) =>
+        this.trackUseCase(current, meta, call, extractResult),
+    );
+  }
+
+  private useCaseFromDocument(useCase: string, options: UseCaseOptions = {}): Resolution {
     this.snapshots.ensureFresh();
     const entry = this.store.get();
     if (!entry) {
       throw new NotReadyError(
-        `no snapshot for environment ${this.config.environment}: PromptOn is unreachable and nothing is cached on disk or bundled`,
+        `no use-case document for environment ${this.config.environment}: PromptOn is unreachable and nothing is cached on disk or bundled`,
       );
     }
     return resolveFromSnapshot(entry.data, useCase, {
@@ -217,72 +336,43 @@ export class PromptOn {
     });
   }
 
-  /**
-   * Renders the resolution's pinned prompt with this call's variables. Chat use cases give a
-   * message list, text use cases a string; an embedding use case has no template.
-   */
-  render(resolution: Resolution, variables?: Record<string, unknown> | null): Message[] | string {
-    const engine = resolution.engine ?? "liquid";
-    if (resolution.kind === "chat" && resolution.messages) {
-      return renderMessages(resolution.messages, variables ?? {}, engine);
-    }
-    if (resolution.kind === "text" && typeof resolution.textTemplate === "string") {
-      return renderTemplate(resolution.textTemplate, variables ?? {}, engine);
-    }
-    throw new NoTemplateError(resolution.useCase);
-  }
-
-  /** {@link render} for a chat use case, typed as a message list. */
-  renderChat(resolution: Resolution, variables?: Record<string, unknown> | null): Message[] {
-    const rendered = this.render(resolution, variables);
-    if (typeof rendered === "string") throw new NoTemplateError(resolution.useCase);
-    return rendered;
-  }
-
-  /** {@link render} for a text use case, typed as a string. */
-  renderText(resolution: Resolution, variables?: Record<string, unknown> | null): string {
-    const rendered = this.render(resolution, variables);
-    if (typeof rendered !== "string") throw new NoTemplateError(resolution.useCase);
-    return rendered;
-  }
-
   /** The prompt names the live deployment pins, sorted. */
   promptNames(useCase: string): string[] {
     const entry = this.store.get();
-    if (!entry) throw new NotReadyError("no snapshot is cached yet");
+    if (!entry) throw new NotReadyError("no use-case document is cached yet");
     return promptNamesFromSnapshot(entry.data, useCase);
   }
 
   /**
-   * `POST /resolve`: the simple path and the smoke test. One round trip per call, so it belongs in
-   * a low-traffic path or a start-up check, never in a hot loop — {@link resolve} is that path.
+   * The prompt endpoint: the simple path and the smoke test. One round trip per call, so it belongs in
+   * a low-traffic path or a start-up check, never in a hot loop — {@link useCase} is that path.
    *
    * The server is asked for the raw template and the answer is cached for the same TTL as the
-   * snapshot, so repeated calls with different variables cost one request; rendering happens
+   * use-case document, so repeated calls with different variables cost one request; rendering happens
    * locally. On `429`, `5xx` or an unreachable server the cached answer is served, and the server
    * is left alone until `Retry-After` — or, absent that, an exponential backoff ×2 from the cache
    * TTL capped at five minutes — has elapsed.
    */
-  async resolveRemote(
+  async filledPrompt(
     useCase: string,
-    options: RemoteResolveOptions = {},
-  ): Promise<RemoteResolution> {
+    options: FilledPromptOptions = {},
+  ): Promise<FilledPrompt> {
     const prompt = options.prompt ?? DEFAULT_PROMPT;
     const value = await this.cachedResolve(useCase, prompt);
 
     if (options.variables === undefined || options.variables === null) return value;
-    const rendered: RemoteResolution = { ...value };
+    const rendered: FilledPrompt = { ...value };
     if (value.messages) rendered.messages = renderMessages(value.messages, options.variables);
     if (typeof value.text === "string") rendered.text = renderTemplate(value.text, options.variables);
     return rendered;
   }
 
   /**
-   * The caching and rate-limiting half of {@link resolveRemote}: at most one request per TTL per
+   * The caching and rate-limiting half of {@link filledPrompt}: at most one request per TTL per
    * key, at most one in flight per key, and no request at all while the server has told us to
    * wait.
    */
-  private async cachedResolve(useCase: string, prompt: string): Promise<RemoteResolution> {
+  private async cachedResolve(useCase: string, prompt: string): Promise<FilledPrompt> {
     const key = `${this.config.environment}|${useCase}|${prompt}`;
     const state = this.resolveCache.get(key);
     const now = Date.now();
@@ -292,7 +382,7 @@ export class PromptOn {
     if (state && now < state.nextAllowedAt) {
       if (state.value) {
         this.quiet.warn(
-          `POST /resolve is paused for ${String(Math.ceil((state.nextAllowedAt - now) / 1000))}s, serving the cached answer for ${useCase}`,
+          `prompt endpoint is paused for ${String(Math.ceil((state.nextAllowedAt - now) / 1000))}s, serving the cached answer for ${useCase}`,
         );
         return state.value;
       }
@@ -322,7 +412,7 @@ export class PromptOn {
     entry: ResolveState,
     useCase: string,
     prompt: string,
-  ): Promise<RemoteResolution> {
+  ): Promise<FilledPrompt> {
     try {
       const value = await this.fetchResolve(useCase, prompt);
       entry.value = value;
@@ -342,7 +432,7 @@ export class PromptOn {
       entry.lastError = error;
       if (entry.value) {
         this.quiet.warn(
-          `POST /resolve failed (${describeError(error)}), serving the cached answer for ${useCase} and retrying in ${String(Math.round(wait / 1000))}s`,
+          `prompt endpoint failed (${describeError(error)}), serving the cached answer for ${useCase} and retrying in ${String(Math.round(wait / 1000))}s`,
         );
         return entry.value;
       }
@@ -352,17 +442,16 @@ export class PromptOn {
     }
   }
 
-  private async fetchResolve(useCase: string, prompt: string): Promise<RemoteResolution> {
+  private async fetchResolve(useCase: string, prompt: string): Promise<FilledPrompt> {
     if (this.config.mode !== "live" || this.config.apiKey === null) {
       throw new NotReadyError(
-        `POST /resolve needs an API key and live mode (mode is ${this.config.mode})`,
+        `prompt endpoint needs an API key and live mode (mode is ${this.config.mode})`,
       );
     }
     const response = await request(this.config, {
       method: "POST",
-      path: "/resolve",
+      path: `/use-cases/${encodeURIComponent(useCase)}/prompt`,
       body: JSON.stringify({
-        use_case: useCase,
         environment: this.config.environment,
         prompt,
       }),
@@ -372,23 +461,27 @@ export class PromptOn {
     if (response.status === 200) {
       const body = parseJson(response.text);
       if (!body || typeof body !== "object") {
-        throw new ApiError(200, "POST /resolve returned an unreadable body", response.text);
+        throw new ApiError(200, "prompt endpoint returned an unreadable body", response.text);
       }
-      return mapRemoteResolution(body as Record<string, unknown>);
+      return mapFilledPrompt(body as Record<string, unknown>);
     }
 
     const details = errorDetails(response.text);
     if (response.status === 404) {
       const reason = details["reason"];
-      if (reason === "unresolved") throw new UnresolvedError(useCase);
+      if (reason === "unresolved") {
+        throw new UnresolvedError(typeof details["key"] === "string" ? details["key"] : useCase);
+      }
       if (reason === "unknown_prompt") {
         throw new UnknownPromptError(
-          useCase,
+          typeof details["key"] === "string" ? details["key"] : useCase,
           typeof details["prompt"] === "string" ? details["prompt"] : prompt,
-          Array.isArray(details["available_prompts"]) ? (details["available_prompts"] as string[]) : [],
+          Array.isArray(details["prompt_names"]) ? (details["prompt_names"] as string[]) : [],
         );
       }
-      if (typeof details["use_case"] === "string") throw new UnknownUseCaseError(useCase);
+      if (reason === "unknown_use_case" || typeof details["key"] === "string") {
+        throw new UnknownUseCaseError(typeof details["key"] === "string" ? details["key"] : useCase);
+      }
     }
     if (response.status === 400 && typeof details["missing_variable"] === "string") {
       throw new MissingVariableError(details["missing_variable"]);
@@ -405,14 +498,14 @@ export class PromptOn {
   // monitoring logs
 
   /** A pre-issued UUIDv7, for an app that wants the id before the call. */
-  generationId(): string {
-    return generationId();
+  logId(): string {
+    return logId();
   }
 
   /**
    * Queues one monitoring-log record the app built itself and returns at once.
    *
-   * Fills in `id`, `started_at`, `sdk` and, when a resolution is passed, the deployment and prompt
+   * Fills in `id`, `started_at`, `sdk` and, when a use case is passed, the deployment and prompt
    * evidence; then applies the use case's payload policy.
    *
    * **Never throws.** A record the server would reject — a missing `status`, a value that will not
@@ -420,12 +513,16 @@ export class PromptOn {
    * monitoring log must not turn a successful generation into a failed request. Pass
    * `strictRecords: true` to raise {@link InvalidRecordError} instead, which is what a test wants.
    */
-  log(record: GenerationRecord, options: LogOptions = {}): void {
+  log(record: LogRecord, options: LogOptions = {}): void {
     this.safely(this.config.strictRecords, () => {
-      const complete = completeRecord({ ...record }, options.resolution ?? null);
+      const useCaseResolution =
+        options.useCase === undefined || options.useCase === null
+          ? null
+          : (options.useCase as unknown as { currentResolution: Resolution }).currentResolution;
+      const complete = completeRecord({ ...record }, useCaseResolution);
       const policy =
         options.policy ??
-        options.resolution?.payloadPolicy ??
+        useCaseResolution?.payloadPolicy ??
         this.policyFor(complete["use_case"]);
       this.enqueue(complete, policy);
     });
@@ -434,31 +531,31 @@ export class PromptOn {
   /**
    * Times a provider call and logs it.
    *
-   * Runs `call`, measures the latency, builds the record from the resolution and the outcome, and
+   * Runs `call`, measures the latency, builds the record from the use case and the result, and
    * queues it. Whatever `call` returns is returned unchanged; whatever it throws is logged as an
    * error record and then rethrown unchanged.
    *
    * The logging half never throws, `strictRecords` or not: an exception raised while building the
    * record would replace the provider's own, which is the one the caller needs to see.
    */
-  async withGeneration<T>(
+  private async trackUseCase<T>(
     resolution: Resolution,
-    meta: GenerationMeta,
+    meta: LogMeta,
     call: () => T | Promise<T>,
-    extractOutcome: (result: T) => ProviderOutcome | null = defaultOutcome,
+    extractResult: (result: T) => ResultLike | null = defaultResult,
   ): Promise<T> {
-    const id = meta.id ?? generationId();
+    const id = meta.id ?? logId();
     const startedAt = new Date();
     const startedNs = process.hrtime.bigint();
 
     try {
       const result = await call();
       const latencyMs = elapsedMs(startedNs);
-      let outcome: ProviderOutcome | null = null;
+      let providerResult: ResultLike | null = null;
       try {
-        outcome = extractOutcome(result);
+        providerResult = extractResult(result);
       } catch (error) {
-        this.config.logger.warn(`outcome extractor threw: ${(error as Error).message}`);
+        this.config.logger.warn(`result extractor threw: ${(error as Error).message}`);
       }
       this.safely(false, () => {
         this.enqueue(
@@ -469,7 +566,7 @@ export class PromptOn {
             startedAt,
             latencyMs,
             status: "ok",
-            outcome,
+            result: providerResult,
             error: null,
           }),
           resolution.payloadPolicy,
@@ -487,7 +584,7 @@ export class PromptOn {
             startedAt,
             latencyMs,
             status: "error",
-            outcome: null,
+            result: null,
             error: classifyError(error),
           }),
           resolution.payloadPolicy,
@@ -511,7 +608,7 @@ export class PromptOn {
   }
 
   /** In test mode, every record that would have been sent, in order. */
-  get logs(): readonly GenerationRecord[] {
+  get logs(): readonly LogRecord[] {
     return this.captured;
   }
 
@@ -521,29 +618,29 @@ export class PromptOn {
   }
 
   // -------------------------------------------------------------------------
-  // snapshot plumbing
+  // use-case document plumbing
 
-  /** Where the current snapshot came from and how old it is. */
-  snapshotInfo(): SnapshotInfo {
+  /** Where the current use-case document came from and how old it is. */
+  useCasesInfo(): UseCasesInfo {
     return this.store.info();
   }
 
-  /** Fetches a snapshot once, now, and waits for it. Never throws. */
+  /** Fetches a use-case document once, now, and waits for it. Never throws. */
   async refresh(options: { timeoutMs?: number } = {}): Promise<RefreshResult> {
     if (this.config.mode === "offline") {
       this.snapshots.reloadLocal();
-      return { status: "skipped", reason: "offline mode reloaded the local snapshot" };
+      return { status: "skipped", reason: "offline mode reloaded the local use-case document" };
     }
     return this.snapshots.refresh(options);
   }
 
   /**
-   * Installs a snapshot document by hand — for tests, and for a process that ships its
-   * configuration some other way. Recorded as `resolution_source: "manual"`.
+   * Installs a use-case document by hand — for tests, and for a process that ships its
+   * configuration some other way. Recorded as `source: "manual"`.
    */
-  loadSnapshot(document: unknown, source: "manual" | "bundle" | "disk" = "manual"): void {
+  loadUseCases(document: unknown, source: "manual" | "bundle" | "disk" = "manual"): void {
     const raw = typeof document === "string" ? document : JSON.stringify(document);
-    const decoded = decodeSnapshot(typeof document === "string" ? JSON.parse(document) : document);
+    const decoded = decodeUseCaseDocument(typeof document === "string" ? JSON.parse(document) : document);
     this.store.set({
       data: decoded.data,
       raw,
@@ -556,13 +653,13 @@ export class PromptOn {
   }
 
   /**
-   * Writes the current snapshot to a file, so it can be committed as the bundle a cold start falls
+   * Writes the current use-case document to a file, so it can be committed as the bundle a cold start falls
    * back to. The bytes are exactly what the server sent, so the ETag still matches.
    */
-  exportSnapshot(path: string): void {
+  exportUseCases(path: string): void {
     const entry = this.store.get();
-    if (!entry) throw new NotReadyError("there is no snapshot to export yet");
-    writeSnapshotFile(path, entry.raw, {
+    if (!entry) throw new NotReadyError("there is no use-case document to export yet");
+    writeUseCaseDocumentFile(path, entry.raw, {
       etag: entry.etag,
       last_modified: entry.lastModified,
       environment: entry.data.environment,
@@ -607,7 +704,7 @@ export class PromptOn {
     }
   }
 
-  private enqueue(record: GenerationRecord, policy: PayloadPolicy | null): void {
+  private enqueue(record: LogRecord, policy: PayloadPolicy | null): void {
     const final = applyPayloadPolicy(record, policy, {
       payloadDefaults: this.config.payloadDefaults,
       hashEndUser: this.config.hashEndUser,
@@ -621,7 +718,7 @@ export class PromptOn {
     this.buffer.enqueue(final);
   }
 
-  private async sendBatch(records: GenerationRecord[]): Promise<SendOutcome> {
+  private async sendBatch(records: LogRecord[]): Promise<SendResult> {
     if (this.config.mode !== "live" || this.config.apiKey === null) {
       return { kind: "drop", reason: "no API key: monitoring logs cannot be sent" };
     }
@@ -629,9 +726,9 @@ export class PromptOn {
     try {
       response = await request(this.config, {
         method: "POST",
-        path: "/generations",
+        path: "/logs",
         query: { environment: this.config.environment },
-        body: JSON.stringify({ generations: records }),
+        body: JSON.stringify({ logs: records }),
         timeoutMs: this.config.requestTimeoutMs,
       });
     } catch (error) {
@@ -661,7 +758,7 @@ export class PromptOn {
   }
 }
 
-function defaultOutcome(result: unknown): ProviderOutcome | null {
+function defaultResult(result: unknown): ResultLike | null {
   if (result === null || result === undefined) return null;
   if (typeof result === "string") return { content: result };
   if (typeof result !== "object") return null;
@@ -699,23 +796,23 @@ function retryAfterOf(error: unknown): number | null {
   return error instanceof ApiError ? error.retryAfterMs : null;
 }
 
-function mapRemoteResolution(body: Record<string, unknown>): RemoteResolution {
+function mapFilledPrompt(body: Record<string, unknown>): FilledPrompt {
   const deployment = (body["deployment"] ?? {}) as Record<string, unknown>;
   const version = body["prompt_version"];
   return {
-    useCase: textOf(body["use_case"]),
+    key: textOf(body["key"]),
     kind: textOf(body["kind"] ?? "chat"),
     deployment: {
       id: typeof deployment["id"] === "string" ? deployment["id"] : null,
       revision: typeof deployment["revision"] === "number" ? deployment["revision"] : null,
     },
     prompt: typeof body["prompt"] === "string" ? body["prompt"] : null,
-    prompts: Array.isArray(body["prompts"]) ? (body["prompts"] as string[]) : [],
+    promptNames: Array.isArray(body["prompt_names"]) ? (body["prompt_names"] as string[]) : [],
     modelId: typeof body["model_id"] === "string" ? body["model_id"] : null,
     model: typeof body["model"] === "string" ? body["model"] : null,
     provider: typeof body["provider"] === "string" ? body["provider"] : null,
-    params: (body["effective_params"] ?? {}) as Record<string, unknown>,
-    providerOptions: (body["effective_provider_options"] ?? {}) as Record<string, unknown>,
+    params: (body["params"] ?? {}) as Record<string, unknown>,
+    providerOptions: (body["provider_options"] ?? {}) as Record<string, unknown>,
     promptVersion:
       version && typeof version === "object"
         ? {
@@ -730,5 +827,6 @@ function mapRemoteResolution(body: Record<string, unknown>): RemoteResolution {
     text: typeof body["text"] === "string" ? body["text"] : null,
     warnings: Array.isArray(body["warnings"]) ? body["warnings"] : [],
     etag: typeof body["etag"] === "string" ? body["etag"] : null,
+    source: typeof body["source"] === "string" ? body["source"] : null,
   };
 }
