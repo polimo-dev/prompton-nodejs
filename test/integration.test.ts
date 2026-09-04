@@ -146,7 +146,7 @@ suite("live fixture server", () => {
     expect(local.kind).toBe("embedding");
     expect(local.prompt).toBeNull();
     expect(body.prompt).toBeNull();
-    expect(local.promptVersion?.id).toBeNull();
+    expect(local.promptVersion).toBeNull();
     expect(body.prompt_version).toBeNull();
     expect(local.promptNames).toEqual(body.prompt_names);
     expect(local.model).toBe(body.model);
