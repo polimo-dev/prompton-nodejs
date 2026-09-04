@@ -178,6 +178,46 @@ describe("test mode", () => {
     const returned = await client.withGeneration(client.resolve("greeting"), {}, () => value);
     expect(returned).toBe(value);
   });
+
+  it("never lets a broken record replace the provider's own error", async () => {
+    const logger = recordingLogger();
+    const client = loaded({ logger, strictRecords: true });
+    const resolution = client.resolve("greeting");
+    const poisoned = Object.create(Object.getPrototypeOf(resolution) as object, {
+      ...Object.getOwnPropertyDescriptors(resolution),
+      params: {
+        get() {
+          throw new Error("record builder blew up");
+        },
+      },
+    }) as typeof resolution;
+    const boom = new Error("the provider is down");
+
+    await expect(
+      client.withGeneration(poisoned, {}, () => {
+        throw boom;
+      }),
+    ).rejects.toBe(boom);
+    expect(client.logs).toHaveLength(0);
+    expect(client.stats().droppedInvalid).toBe(1);
+    expect(logger.lines.join("\n")).toMatch(/record builder blew up/u);
+  });
+
+  it("never lets a broken record fail a successful call", async () => {
+    const client = loaded({ strictRecords: true });
+    const resolution = client.resolve("greeting");
+    const poisoned = Object.create(Object.getPrototypeOf(resolution) as object, {
+      ...Object.getOwnPropertyDescriptors(resolution),
+      params: {
+        get() {
+          throw new Error("record builder blew up");
+        },
+      },
+    }) as typeof resolution;
+
+    await expect(client.withGeneration(poisoned, {}, () => "fine")).resolves.toBe("fine");
+    expect(client.stats().droppedInvalid).toBe(1);
+  });
 });
 
 describe("log()", () => {
@@ -206,9 +246,19 @@ describe("log()", () => {
     });
   });
 
-  it("refuses a record with no status", () => {
-    const client = loaded();
+  it("drops a record with no status instead of failing the caller's request", () => {
+    const logger = recordingLogger();
+    const client = loaded({ logger });
+    expect(() => client.log({ use_case: "greeting", model: "m" })).not.toThrow();
+    expect(client.logs).toHaveLength(0);
+    expect(client.stats().droppedInvalid).toBe(1);
+    expect(logger.lines.some((line) => line.includes("dropped a monitoring log"))).toBe(true);
+  });
+
+  it("raises the same record under strictRecords, for tests", () => {
+    const client = loaded({ strictRecords: true });
     expect(() => client.log({ use_case: "greeting", model: "m" })).toThrowError(InvalidRecordError);
+    expect(client.stats().droppedInvalid).toBe(0);
   });
 
   it("applies the use case's payload policy from the snapshot", () => {
@@ -325,6 +375,36 @@ describe("sending monitoring logs", () => {
     const result = await client.close(2000);
     expect(result.pending).toBe(0);
     expect(result.accepted).toBe(2);
+  });
+});
+
+describe("client lifecycle", () => {
+  it("registers one beforeExit listener however many clients exist", async () => {
+    const before = process.listenerCount("beforeExit");
+    const warnings: string[] = [];
+    const onWarning = (warning: Error): void => {
+      warnings.push(warning.name);
+    };
+    process.on("warning", onWarning);
+
+    const many = Array.from(
+      { length: 15 },
+      () =>
+        new PromptOn({
+          mode: "offline",
+          diskCache: false,
+          poll: false,
+          logger: recordingLogger(),
+        }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    process.off("warning", onWarning);
+
+    expect(warnings).not.toContain("MaxListenersExceededWarning");
+    expect(process.listenerCount("beforeExit")).toBeLessThanOrEqual(before + 1);
+
+    await Promise.all(many.map((client) => client.close(50)));
+    expect(process.listenerCount("beforeExit")).toBe(before);
   });
 });
 

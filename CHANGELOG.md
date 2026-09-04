@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- `resolveRemote()` now honours the rate-limit rule. A `429`, a `5xx` or an unreachable server
+  pauses that `(use case, prompt, environment)` key until `Retry-After` — falling back to
+  `error.details.retry_after`, then to an exponential backoff ×2 from the cache TTL capped at five
+  minutes — instead of re-issuing `POST /resolve` on every single call. The cached answer keeps
+  being served throughout; with nothing cached, the calls inside the pause raise the original error
+  without touching the network. Concurrent calls for one key now share a single in-flight request.
+- `log()` never throws. A record the server would reject is dropped, counted in the new
+  `stats().droppedInvalid` and warned about once, rather than turning a successful generation into
+  a failed request; `withGeneration()`'s logging half does the same, so it can never replace the
+  provider's own error with one of its own.
+- A git install now yields an importable package: `dist/` is not committed, and the package had no
+  `prepare` script to build it. `npm run check:install` is a new gate that installs from the
+  repository and imports both entry points.
+- One shared `beforeExit` listener for every client, instead of one per instance, which tripped
+  Node's `MaxListenersExceededWarning` past ten clients.
+- The API-key fixture in `test/config.test.ts` is synthetic; the previous one shared its random
+  suffix with a live key.
+
+### Added
+
+- `strictRecords` option: make `log()` raise `InvalidRecordError` instead of dropping a bad record.
+  Off by default, for tests.
+- `ApiError.retryAfterMs`: what the response's `Retry-After` (or `error.details.retry_after`) said,
+  in milliseconds, or `null`.
+- `BufferStats.droppedInvalid`.
+
 ## 0.1.0 — 2026-09-04
 
 Initial release: the official PromptOn SDK for Node.js and TypeScript.

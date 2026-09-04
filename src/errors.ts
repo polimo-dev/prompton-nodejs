@@ -127,10 +127,16 @@ export class InvalidRecordError extends PromptOnError {
 export class ApiError extends PromptOnError {
   readonly status: number;
   readonly body: unknown;
+  /**
+   * How long the server asked us to wait, in milliseconds: `Retry-After`, or
+   * `error.details.retry_after`. `null` when the response carried neither.
+   */
+  readonly retryAfterMs: number | null;
 
-  constructor(status: number, message: string, body: unknown) {
+  constructor(status: number, message: string, body: unknown, retryAfterMs: number | null = null) {
     super("http_error", message);
     this.status = status;
     this.body = body;
+    this.retryAfterMs = retryAfterMs;
   }
 }

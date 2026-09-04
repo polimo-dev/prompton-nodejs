@@ -36,6 +36,7 @@ import { SnapshotManager, type RefreshResult } from "./snapshot.js";
 import { SnapshotStore, writeSnapshotFile, type SnapshotInfo } from "./store.js";
 import { render as renderTemplate, renderMessages, type Message } from "./template.js";
 import { textOf } from "./json.js";
+import { throttled, type Logger } from "./logger.js";
 import { VERSION } from "./version.js";
 
 /** Options for {@link PromptOn.resolve}. */
@@ -77,9 +78,48 @@ export interface LogOptions {
   policy?: PayloadPolicy | null;
 }
 
-interface CachedResolve {
-  value: RemoteResolution;
+/**
+ * What we know about one `(environment, use case, prompt)` key: the last answer, when it was
+ * fetched, and — after a `429`, a `5xx` or an unreachable server — the instant before which we
+ * must not contact the server again.
+ */
+interface ResolveState {
+  value: RemoteResolution | null;
   fetchedAt: number;
+  nextAllowedAt: number;
+  failures: number;
+  lastError: unknown;
+  inFlight: Promise<RemoteResolution> | null;
+}
+
+/** Exponential backoff ×2 from the cache TTL, capped at five minutes. */
+const RESOLVE_BACKOFF_CAP_MS = 300_000;
+
+/**
+ * One `beforeExit` listener for the whole process, however many clients exist. Registering one
+ * per client trips Node's `MaxListenersExceededWarning` at eleven and reads like a leak.
+ */
+const exitFlushers = new Set<() => void>();
+let exitHandlerInstalled = false;
+
+function runExitFlushers(): void {
+  for (const flush of exitFlushers) flush();
+}
+
+function addExitFlusher(flush: () => void): void {
+  exitFlushers.add(flush);
+  if (!exitHandlerInstalled) {
+    exitHandlerInstalled = true;
+    process.once("beforeExit", runExitFlushers);
+  }
+}
+
+function removeExitFlusher(flush: () => void): void {
+  exitFlushers.delete(flush);
+  if (exitFlushers.size === 0 && exitHandlerInstalled) {
+    exitHandlerInstalled = false;
+    process.removeListener("beforeExit", runExitFlushers);
+  }
 }
 
 /**
@@ -98,14 +138,16 @@ export class PromptOn {
   private readonly store = new SnapshotStore();
   private readonly snapshots: SnapshotManager;
   private readonly buffer: LogBuffer;
-  private readonly resolveCache = new Map<string, CachedResolve>();
+  private readonly resolveCache = new Map<string, ResolveState>();
   private readonly captured: GenerationRecord[] = [];
+  private readonly quiet: Logger;
   private readyPromise: Promise<RefreshResult> | null = null;
   private exitHandler: (() => void) | null = null;
   private closed = false;
 
   constructor(options: PromptOnOptions = {}) {
     this.config = resolveConfig(options);
+    this.quiet = throttled(this.config.logger, 60_000);
     this.snapshots = new SnapshotManager(this.config, this.store);
     this.buffer = new LogBuffer((records) => this.sendBatch(records), {
       ...this.config.log,
@@ -132,7 +174,7 @@ export class PromptOn {
       this.exitHandler = () => {
         void this.buffer.flush(2000).catch(() => undefined);
       };
-      process.once("beforeExit", this.exitHandler);
+      addExitFlusher(this.exitHandler);
     }
   }
 
@@ -217,41 +259,97 @@ export class PromptOn {
    *
    * The server is asked for the raw template and the answer is cached for the same TTL as the
    * snapshot, so repeated calls with different variables cost one request; rendering happens
-   * locally. On `429`, `5xx` or an unreachable server the cached answer is served.
+   * locally. On `429`, `5xx` or an unreachable server the cached answer is served, and the server
+   * is left alone until `Retry-After` — or, absent that, an exponential backoff ×2 from the cache
+   * TTL capped at five minutes — has elapsed.
    */
   async resolveRemote(
     useCase: string,
     options: RemoteResolveOptions = {},
   ): Promise<RemoteResolution> {
     const prompt = options.prompt ?? DEFAULT_PROMPT;
-    const key = `${this.config.environment}|${useCase}|${prompt}`;
-    const cached = this.resolveCache.get(key);
-    const now = Date.now();
-
-    let value: RemoteResolution;
-    if (cached && now - cached.fetchedAt < this.config.cacheTtlMs) {
-      value = cached.value;
-    } else {
-      try {
-        value = await this.fetchResolve(useCase, prompt);
-        this.resolveCache.set(key, { value, fetchedAt: now });
-      } catch (error) {
-        if (cached && isTransient(error)) {
-          this.config.logger.warn(
-            `POST /resolve failed (${(error as Error).message}), serving the cached answer for ${useCase}`,
-          );
-          value = cached.value;
-        } else {
-          throw error;
-        }
-      }
-    }
+    const value = await this.cachedResolve(useCase, prompt);
 
     if (options.variables === undefined || options.variables === null) return value;
     const rendered: RemoteResolution = { ...value };
     if (value.messages) rendered.messages = renderMessages(value.messages, options.variables);
     if (typeof value.text === "string") rendered.text = renderTemplate(value.text, options.variables);
     return rendered;
+  }
+
+  /**
+   * The caching and rate-limiting half of {@link resolveRemote}: at most one request per TTL per
+   * key, at most one in flight per key, and no request at all while the server has told us to
+   * wait.
+   */
+  private async cachedResolve(useCase: string, prompt: string): Promise<RemoteResolution> {
+    const key = `${this.config.environment}|${useCase}|${prompt}`;
+    const state = this.resolveCache.get(key);
+    const now = Date.now();
+
+    if (state?.value && now - state.fetchedAt < this.config.cacheTtlMs) return state.value;
+    if (state?.inFlight) return state.inFlight;
+    if (state && now < state.nextAllowedAt) {
+      if (state.value) {
+        this.quiet.warn(
+          `POST /resolve is paused for ${String(Math.ceil((state.nextAllowedAt - now) / 1000))}s, serving the cached answer for ${useCase}`,
+        );
+        return state.value;
+      }
+      throw state.lastError;
+    }
+
+    const entry: ResolveState = {
+      value: state?.value ?? null,
+      fetchedAt: state?.fetchedAt ?? 0,
+      nextAllowedAt: state?.nextAllowedAt ?? 0,
+      failures: state?.failures ?? 0,
+      lastError: state?.lastError,
+      inFlight: null,
+    };
+    const pending = this.fetchInto(entry, useCase, prompt);
+    entry.inFlight = pending;
+    this.resolveCache.set(key, entry);
+    return pending;
+  }
+
+  /**
+   * The one request. Updates `entry` in place — it is the map's own object — so a concurrent
+   * caller awaiting `entry.inFlight` sees exactly what the caller that started the request sees,
+   * cached fallback included.
+   */
+  private async fetchInto(
+    entry: ResolveState,
+    useCase: string,
+    prompt: string,
+  ): Promise<RemoteResolution> {
+    try {
+      const value = await this.fetchResolve(useCase, prompt);
+      entry.value = value;
+      entry.fetchedAt = Date.now();
+      entry.nextAllowedAt = 0;
+      entry.failures = 0;
+      entry.lastError = null;
+      return value;
+    } catch (error) {
+      if (!isTransient(error)) throw error;
+      const wait = Math.min(
+        retryAfterOf(error) ?? this.config.cacheTtlMs * 2 ** Math.min(entry.failures, 20),
+        RESOLVE_BACKOFF_CAP_MS,
+      );
+      entry.failures += 1;
+      entry.nextAllowedAt = Date.now() + wait;
+      entry.lastError = error;
+      if (entry.value) {
+        this.quiet.warn(
+          `POST /resolve failed (${describeError(error)}), serving the cached answer for ${useCase} and retrying in ${String(Math.round(wait / 1000))}s`,
+        );
+        return entry.value;
+      }
+      throw error;
+    } finally {
+      entry.inFlight = null;
+    }
   }
 
   private async fetchResolve(useCase: string, prompt: string): Promise<RemoteResolution> {
@@ -295,7 +393,12 @@ export class PromptOn {
     if (response.status === 400 && typeof details["missing_variable"] === "string") {
       throw new MissingVariableError(details["missing_variable"]);
     }
-    throw new ApiError(response.status, errorMessage(response), parseJson(response.text));
+    throw new ApiError(
+      response.status,
+      errorMessage(response),
+      parseJson(response.text),
+      retryAfterMs(response),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -310,16 +413,22 @@ export class PromptOn {
    * Queues one monitoring-log record the app built itself and returns at once.
    *
    * Fills in `id`, `started_at`, `sdk` and, when a resolution is passed, the deployment and prompt
-   * evidence; then applies the use case's payload policy. Throws only when a field the server
-   * requires is missing, which is a bug at the call site rather than a runtime condition.
+   * evidence; then applies the use case's payload policy.
+   *
+   * **Never throws.** A record the server would reject — a missing `status`, a value that will not
+   * encode — is dropped, counted in `stats().droppedInvalid` and warned about once, because a
+   * monitoring log must not turn a successful generation into a failed request. Pass
+   * `strictRecords: true` to raise {@link InvalidRecordError} instead, which is what a test wants.
    */
   log(record: GenerationRecord, options: LogOptions = {}): void {
-    const complete = completeRecord({ ...record }, options.resolution ?? null);
-    const policy =
-      options.policy ??
-      options.resolution?.payloadPolicy ??
-      this.policyFor(complete["use_case"]);
-    this.enqueue(complete, policy);
+    this.safely(this.config.strictRecords, () => {
+      const complete = completeRecord({ ...record }, options.resolution ?? null);
+      const policy =
+        options.policy ??
+        options.resolution?.payloadPolicy ??
+        this.policyFor(complete["use_case"]);
+      this.enqueue(complete, policy);
+    });
   }
 
   /**
@@ -328,6 +437,9 @@ export class PromptOn {
    * Runs `call`, measures the latency, builds the record from the resolution and the outcome, and
    * queues it. Whatever `call` returns is returned unchanged; whatever it throws is logged as an
    * error record and then rethrown unchanged.
+   *
+   * The logging half never throws, `strictRecords` or not: an exception raised while building the
+   * record would replace the provider's own, which is the one the caller needs to see.
    */
   async withGeneration<T>(
     resolution: Resolution,
@@ -348,35 +460,39 @@ export class PromptOn {
       } catch (error) {
         this.config.logger.warn(`outcome extractor threw: ${(error as Error).message}`);
       }
-      this.enqueue(
-        buildRecord({
-          resolution,
-          meta,
-          id,
-          startedAt,
-          latencyMs,
-          status: "ok",
-          outcome,
-          error: null,
-        }),
-        resolution.payloadPolicy,
-      );
+      this.safely(false, () => {
+        this.enqueue(
+          buildRecord({
+            resolution,
+            meta,
+            id,
+            startedAt,
+            latencyMs,
+            status: "ok",
+            outcome,
+            error: null,
+          }),
+          resolution.payloadPolicy,
+        );
+      });
       return result;
     } catch (error) {
       const latencyMs = elapsedMs(startedNs);
-      this.enqueue(
-        buildRecord({
-          resolution,
-          meta,
-          id,
-          startedAt,
-          latencyMs,
-          status: "error",
-          outcome: null,
-          error: classifyError(error),
-        }),
-        resolution.payloadPolicy,
-      );
+      this.safely(false, () => {
+        this.enqueue(
+          buildRecord({
+            resolution,
+            meta,
+            id,
+            startedAt,
+            latencyMs,
+            status: "error",
+            outcome: null,
+            error: classifyError(error),
+          }),
+          resolution.payloadPolicy,
+        );
+      });
       throw error;
     }
   }
@@ -461,7 +577,7 @@ export class PromptOn {
     this.closed = true;
     this.snapshots.stop();
     if (this.exitHandler) {
-      process.removeListener("beforeExit", this.exitHandler);
+      removeExitFlusher(this.exitHandler);
       this.exitHandler = null;
     }
     const result = await this.flush(timeoutMs);
@@ -477,22 +593,32 @@ export class PromptOn {
     return entry?.data.useCases[useCase]?.payloadPolicy ?? null;
   }
 
-  private enqueue(record: GenerationRecord, policy: PayloadPolicy | null): void {
+  /**
+   * Runs the monitoring-log path and swallows whatever it throws, so a bad record costs a counter
+   * and a warning rather than the caller's request. `strict` re-raises, for tests.
+   */
+  private safely(strict: boolean, work: () => void): void {
     try {
-      const final = applyPayloadPolicy(record, policy, {
-        payloadDefaults: this.config.payloadDefaults,
-        hashEndUser: this.config.hashEndUser,
-        redact: this.config.redact,
-        logger: this.config.logger,
-      });
-      if (this.config.mode === "test") {
-        this.captured.push(final);
-        return;
-      }
-      this.buffer.enqueue(final);
+      work();
     } catch (error) {
-      this.config.logger.warn(`dropped a monitoring log: ${(error as Error).message}`);
+      if (strict) throw error;
+      this.buffer.countInvalid();
+      this.quiet.warn(`dropped a monitoring log: ${describeError(error)}`);
     }
+  }
+
+  private enqueue(record: GenerationRecord, policy: PayloadPolicy | null): void {
+    const final = applyPayloadPolicy(record, policy, {
+      payloadDefaults: this.config.payloadDefaults,
+      hashEndUser: this.config.hashEndUser,
+      redact: this.config.redact,
+      logger: this.config.logger,
+    });
+    if (this.config.mode === "test") {
+      this.captured.push(final);
+      return;
+    }
+    this.buffer.enqueue(final);
   }
 
   private async sendBatch(records: GenerationRecord[]): Promise<SendOutcome> {
@@ -542,6 +668,10 @@ function defaultOutcome(result: unknown): ProviderOutcome | null {
   return result;
 }
 
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function elapsedMs(startedNs: bigint): number {
   return Number((process.hrtime.bigint() - startedNs) / 1_000_000n);
 }
@@ -562,6 +692,11 @@ function isTransient(error: unknown): boolean {
   if (error instanceof TransportError) return true;
   if (error instanceof ApiError) return error.status === 429 || error.status >= 500;
   return false;
+}
+
+/** How long the server asked us to wait, when it said so. */
+function retryAfterOf(error: unknown): number | null {
+  return error instanceof ApiError ? error.retryAfterMs : null;
 }
 
 function mapRemoteResolution(body: Record<string, unknown>): RemoteResolution {

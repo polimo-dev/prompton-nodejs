@@ -109,6 +109,126 @@ describe("resolveRemote", () => {
     expect(again.messages?.[1]?.content).toBe("Say hello to Ada.");
   });
 
+  it("waits out Retry-After before contacting the server again", async () => {
+    let resolveCalls = 0;
+    const fetch = fakeFetch((url) => {
+      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      resolveCalls += 1;
+      if (resolveCalls === 1) return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
+      return new Response(
+        JSON.stringify({
+          error: { code: "rate_limited", message: "slow down", details: { retry_after: 300 } },
+        }),
+        { status: 429, headers: { "retry-after": "300" } },
+      );
+    });
+    const client = make(fetch, { cacheTtlMs: 20 });
+    await client.resolveRemote("greeting");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    for (let i = 0; i < 20; i += 1) {
+      const answer = await client.resolveRemote("greeting", { variables: { name: "Ada" } });
+      expect(answer.messages?.[1]?.content).toBe("Say hello to Ada.");
+    }
+
+    expect(resolveCalls).toBe(2);
+  });
+
+  it("backs off exponentially from the TTL when the server sends no Retry-After", async () => {
+    let resolveCalls = 0;
+    const fetch = fakeFetch((url) => {
+      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      resolveCalls += 1;
+      if (resolveCalls === 1) return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
+      return new Response(JSON.stringify({ error: { code: "internal_error", message: "boom" } }), {
+        status: 500,
+      });
+    });
+    const client = make(fetch, { cacheTtlMs: 40 });
+    await client.resolveRemote("greeting");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    await client.resolveRemote("greeting");
+    expect(resolveCalls).toBe(2);
+    await client.resolveRemote("greeting");
+    expect(resolveCalls).toBe(2);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await client.resolveRemote("greeting");
+    expect(resolveCalls).toBe(3);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await client.resolveRemote("greeting");
+    expect(resolveCalls).toBe(3);
+  });
+
+  it("does not hammer the server when it has nothing cached to serve", async () => {
+    let resolveCalls = 0;
+    const fetch = fakeFetch((url) => {
+      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      resolveCalls += 1;
+      return new Response(
+        JSON.stringify({ error: { code: "unavailable", message: "down" } }),
+        { status: 503, headers: { "retry-after": "120" } },
+      );
+    });
+    const client = make(fetch, { cacheTtlMs: 20 });
+
+    for (let i = 0; i < 5; i += 1) {
+      await expect(client.resolveRemote("greeting")).rejects.toBeInstanceOf(ApiError);
+    }
+    expect(resolveCalls).toBe(1);
+  });
+
+  it("collapses concurrent calls for one key into a single request", async () => {
+    let resolveCalls = 0;
+    const fetch = fakeFetch((url) => {
+      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      resolveCalls += 1;
+      return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
+    });
+    const client = make(fetch);
+    const answers = await Promise.all([
+      client.resolveRemote("greeting", { variables: { name: "Ada" } }),
+      client.resolveRemote("greeting", { variables: { name: "Grace" } }),
+      client.resolveRemote("greeting", { variables: { name: "Alan" } }),
+    ]);
+
+    expect(resolveCalls).toBe(1);
+    expect(answers.map((answer) => answer.messages?.[1]?.content)).toEqual([
+      "Say hello to Ada.",
+      "Say hello to Grace.",
+      "Say hello to Alan.",
+    ]);
+  });
+
+  it("gives concurrent waiters the cached answer when the shared request fails", async () => {
+    let resolveCalls = 0;
+    const fetch = fakeFetch((url) => {
+      if (url.includes("/snapshot")) return snapshotResponse(snapshotDocument());
+      resolveCalls += 1;
+      if (resolveCalls === 1) return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
+      return new Response(JSON.stringify({ error: { code: "unavailable", message: "down" } }), {
+        status: 503,
+      });
+    });
+    const client = make(fetch, { cacheTtlMs: 20 });
+    await client.resolveRemote("greeting");
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    const answers = await Promise.all([
+      client.resolveRemote("greeting", { variables: { name: "Ada" } }),
+      client.resolveRemote("greeting", { variables: { name: "Grace" } }),
+      client.resolveRemote("greeting", { variables: { name: "Alan" } }),
+    ]);
+
+    expect(resolveCalls).toBe(2);
+    expect(answers.map((answer) => answer.messages?.[1]?.content)).toEqual([
+      "Say hello to Ada.",
+      "Say hello to Grace.",
+      "Say hello to Alan.",
+    ]);
+  });
+
   it("reports a missing variable from the local render", async () => {
     const fetch = fakeFetch((url) =>
       url.includes("/snapshot")

@@ -28,6 +28,7 @@ Not published to npm yet. Depend on the repository:
 npm install github:polimo-dev/prompton-nodejs
 ```
 
+`dist/` is not committed; npm runs the package's `prepare` script on a git install, which builds it.
 Node 20 or newer. No runtime dependencies. ESM and CommonJS both work:
 
 ```ts
@@ -83,7 +84,8 @@ Precedence is **explicit option → environment variable → default**.
 | `log.maxQueue` | — | `10000` | Drop the oldest record past this, and count it |
 | `log.maxAttempts` | — | `8` | Retries of one batch before it is dropped and counted |
 | `poll` | — | `true` in live mode | Revalidate in the background on a timer |
-| `flushOnExit` | — | `true` | Flush the buffer when the process is about to exit |
+| `strictRecords` | — | `false` | Make `log()` raise on a record the server would reject, instead of dropping and counting it. For tests |
+| `flushOnExit` | — | `true` | Flush the buffer when the process is about to exit. One `beforeExit` listener is shared by every instance |
 | `fetch` | — | global `fetch` | Injected for tests |
 | `logger` | — | console | Any object with `debug/info/warn/error`, or `false` for silence |
 
@@ -151,6 +153,9 @@ environment guard in whichever environment it was not exported from.
 | Monitoring logs get `413` | Splits the batch in half and resends both halves | Nothing |
 | Monitoring logs get any other `4xx` | Drops the batch, counts it, logs once. Retrying a rejected batch only loses the ones behind it | Nothing |
 | The log queue is full | Drops the oldest and counts it | Nothing |
+| `log()` is handed a record with a field missing | Drops it, counts it in `droppedInvalid`, warns once | Nothing — unless `strictRecords` is on, which raises `InvalidRecordError` |
+| The record builder throws inside `withGeneration` | Drops the record and counts it | Nothing; your own return value or your own exception, untouched |
+| `POST /resolve` gets `429` or `5xx` | Serves the cached answer and stops calling until `Retry-After`, else backs off ×2 from the cache TTL to 5 min | Nothing, if that key was ever answered; otherwise the original `ApiError` |
 
 Prove it before you ship: run your app with a wrong `PTN_HOST` and confirm that generations still
 happen on the cached snapshot.
@@ -197,8 +202,13 @@ test and the low-traffic path — never a hot loop:
 const resolved = await prompton.resolveRemote("greeting", { variables: { name: "Ada" } });
 ```
 
-It obeys the same rules: one request per cache TTL per (use case, prompt, environment), rendered
-locally, and the cached answer served when the server answers `429`, `5xx` or nothing at all.
+It obeys the same rules: one request per cache TTL per (use case, prompt, environment) — one in
+flight at a time, so a burst of concurrent calls costs a single request — rendered locally, and the
+cached answer served when the server answers `429`, `5xx` or nothing at all. A failure also pauses
+the key: the server is left alone until `Retry-After` has elapsed, or, absent that header and
+`error.details.retry_after`, for an exponential backoff ×2 from the cache TTL capped at five
+minutes. With nothing cached to serve, the calls inside that pause raise the original error without
+touching the network.
 
 ## Monitoring logs
 
@@ -214,6 +224,13 @@ await prompton.withGeneration(resolution, meta, call);   // time a provider call
 when you pass a resolution — the deployment and prompt evidence. It validates the five fields the
 server requires (`use_case`, `model`, `status`, `started_at`, plus the `id` it generated) and
 returns at once; nothing is sent on the calling path.
+
+**`log()` never throws.** A record the server would reject is dropped, counted in
+`stats().droppedInvalid` and warned about once, because a monitoring log must never turn a
+successful generation into a failed request. Set `strictRecords: true` to raise
+`InvalidRecordError` instead — that is what you want in a test suite, not in production. The
+wrapper below never raises from its logging half at all, `strictRecords` or not: an exception there
+would replace the provider's own error, which is the one you need to see.
 
 `withGeneration(resolution, meta, call, extractOutcome?)` takes:
 
@@ -293,7 +310,14 @@ npm run lint
 npm run typecheck
 npm run build
 npm test
+node examples/basic.mjs
+npm run check:install
 ```
+
+`npm run check:install` installs the package into a scratch directory straight from this git
+repository at `HEAD`, exactly as the Install section tells a consumer to, and imports it through
+both entry points — so the documented install path is a gate rather than a claim. It needs the fix
+you are testing to be committed.
 
 `test/conformance/` is the cross-language conformance suite, copied verbatim from the reference
 implementation ([prompton-elixir](https://github.com/polimo-dev/prompton-elixir)); every case in it

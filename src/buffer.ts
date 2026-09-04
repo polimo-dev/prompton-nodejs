@@ -41,6 +41,8 @@ export interface BufferStats {
   droppedTooLarge: number;
   droppedRejected: number;
   droppedRetriesExhausted: number;
+  /** Records the SDK could not even build: a missing required field, or an unencodable value. */
+  droppedInvalid: number;
 }
 
 /** What a `flush()` achieved. */
@@ -93,6 +95,7 @@ export class LogBuffer {
     droppedTooLarge: 0,
     droppedRejected: 0,
     droppedRetriesExhausted: 0,
+    droppedInvalid: 0,
   };
 
   constructor(send: Sender, options: BufferOptions) {
@@ -129,6 +132,14 @@ export class LogBuffer {
     this.dropOldestOverflow();
     this.scheduleTimer();
     if (this.thresholdReached()) void this.pump().catch(() => undefined);
+  }
+
+  /**
+   * Counts one record the client could not build or encode. Logging must never fail a generation,
+   * so a bad record is dropped here rather than raised at the call site.
+   */
+  countInvalid(): void {
+    this.stats.droppedInvalid += 1;
   }
 
   /** How many records are waiting. */

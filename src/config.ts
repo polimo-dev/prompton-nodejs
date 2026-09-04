@@ -50,6 +50,12 @@ export interface PromptOnOptions {
   redact?: ((record: GenerationRecord) => GenerationRecord | null | undefined) | null;
   /** Payload policy used when the snapshot's use case declares none. */
   payloadDefaults?: Partial<NormalizedPolicy>;
+  /**
+   * Raise instead of dropping when {@link PromptOn.log} is handed a record the server would
+   * reject. Off by default: logging must never fail a generation. Turn it on in tests to catch a
+   * bad call site. Never applies to the wrapper, which must not replace the provider's own error.
+   */
+  strictRecords?: boolean;
   /** Monitoring-log buffer knobs. */
   log?: LogOptions;
   /** Poll for snapshot changes in the background. Default `true` outside test mode. */
@@ -77,6 +83,7 @@ export interface ResolvedConfig {
   hashEndUser: boolean;
   redact: ((record: GenerationRecord) => GenerationRecord | null | undefined) | null;
   payloadDefaults: Partial<NormalizedPolicy>;
+  strictRecords: boolean;
   log: Required<LogOptions>;
   poll: boolean;
   flushOnExit: boolean;
@@ -129,6 +136,7 @@ export function resolveConfig(
     hashEndUser: options.hashEndUser === true,
     redact: options.redact ?? null,
     payloadDefaults: options.payloadDefaults ?? {},
+    strictRecords: options.strictRecords === true,
     log: {
       flushIntervalMs: positive(options.log?.flushIntervalMs, DEFAULT_LOG.flushIntervalMs, "log.flushIntervalMs"),
       flushSize: positive(options.log?.flushSize, DEFAULT_LOG.flushSize, "log.flushSize"),
