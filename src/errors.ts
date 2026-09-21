@@ -4,15 +4,16 @@
  */
 export type PromptOnErrorCode =
   | "not_ready"
-  | "unknown_use_case"
-  | "unresolved"
   | "unknown_prompt"
+  | "unresolved"
+  | "unknown_template"
   | "no_template"
   | "missing_variable"
   | "parse_error"
   | "render_error"
   | "invalid_config"
   | "invalid_record"
+  | "invalid_request"
   | "http_error"
   | "transport_error";
 
@@ -29,7 +30,7 @@ export class PromptOnError extends Error {
 
 /**
  * Nothing is cached and PromptOn could not be reached: neither memory, disk nor a bundle holds a
- * use-case document for this environment. This is the only lookup failure that means "PromptOn is
+ * prompt document for this environment. This is the only lookup failure that means "PromptOn is
  * unreachable"; the others mean the deployment or the call is wrong.
  */
 export class NotReadyError extends PromptOnError {
@@ -38,50 +39,50 @@ export class NotReadyError extends PromptOnError {
   }
 }
 
-/** The use case key is not in the use-case document. */
-export class UnknownUseCaseError extends PromptOnError {
-  readonly useCase: string;
+/** The prompt key is not in the prompt document. */
+export class UnknownPromptError extends PromptOnError {
+  readonly promptKey: string;
 
-  constructor(useCase: string) {
-    super("unknown_use_case", `unknown use case: ${useCase}`);
-    this.useCase = useCase;
+  constructor(promptKey: string) {
+    super("unknown_prompt", `unknown prompt: ${promptKey}`);
+    this.promptKey = promptKey;
   }
 }
 
-/** The use case exists but has no live deployment in this environment. */
+/** The prompt exists but has no live deployment in this environment. */
 export class UnresolvedError extends PromptOnError {
-  readonly useCase: string;
+  readonly promptKey: string;
 
-  constructor(useCase: string) {
+  constructor(promptKey: string) {
     super(
       "unresolved",
-      `use case ${useCase} has no live deployment in this environment — deploy it, never fall back to a hard-coded prompt`,
+      `prompt ${promptKey} has no live deployment in this environment — deploy it, never fall back to a hard-coded prompt`,
     );
-    this.useCase = useCase;
+    this.promptKey = promptKey;
   }
 }
 
-/** The live deployment pins no prompt version under the requested name. */
-export class UnknownPromptError extends PromptOnError {
-  readonly useCase: string;
-  readonly prompt: string;
-  readonly promptNames: string[];
+/** The live deployment pins no prompt template version under the requested template name. */
+export class UnknownTemplateError extends PromptOnError {
+  readonly promptKey: string;
+  readonly template: string;
+  readonly templateNames: string[];
 
-  constructor(useCase: string, prompt: string, promptNames: string[]) {
+  constructor(promptKey: string, template: string, templateNames: string[]) {
     super(
-      "unknown_prompt",
-      `the live deployment of ${useCase} pins no prompt named "${prompt}" — available prompt names: ${promptNames.join(", ")}`,
+      "unknown_template",
+      `the live deployment of ${promptKey} pins no template named "${template}" — available template names: ${templateNames.join(", ")}`,
     );
-    this.useCase = useCase;
-    this.prompt = prompt;
-    this.promptNames = promptNames;
+    this.promptKey = promptKey;
+    this.template = template;
+    this.templateNames = templateNames;
   }
 }
 
-/** `messages()` or `text()` was called on a use case that carries no template. */
+/** `messages()` or `text()` was called on a prompt that carries no template. */
 export class NoTemplateError extends PromptOnError {
-  constructor(useCase: string) {
-    super("no_template", `use case ${useCase} has no prompt template to render`);
+  constructor(prompt: string) {
+    super("no_template", `prompt ${prompt} has no prompt template to render`);
   }
 }
 
@@ -120,6 +121,13 @@ export class ConfigError extends PromptOnError {
 export class InvalidRecordError extends PromptOnError {
   constructor(message: string) {
     super("invalid_record", message);
+  }
+}
+
+/** A prompt cannot produce a provider request from the stored deployment metadata. */
+export class PreparedRequestError extends PromptOnError {
+  constructor(message: string) {
+    super("invalid_request", message);
   }
 }
 

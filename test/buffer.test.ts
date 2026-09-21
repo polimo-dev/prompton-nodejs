@@ -12,7 +12,7 @@ import { recordingLogger } from "./helpers.js";
 function record(id: string, extra: LogRecord = {}): LogRecord {
   return {
     id,
-    use_case: "greeting",
+    prompt_key: "greeting",
     model: "openai/gpt-4o-mini",
     status: "ok",
     started_at: "2026-09-04T09:00:00.000Z",

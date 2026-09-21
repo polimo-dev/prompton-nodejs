@@ -3,17 +3,17 @@
 The official [PromptOn](https://app.prompton.ai) SDK for Node.js and TypeScript.
 
 PromptOn is the control plane for the prompts and models your app uses. Every place your code calls
-an LLM becomes a **use case**, and for each use case and environment PromptOn holds one **pin**: a
+an LLM becomes a **prompt**, and for each prompt and environment PromptOn holds one **pin**: a
 prompt version, one model, and its parameters.
 
-**PromptOn is config-fetch, not a proxy.** This SDK fetches a *use-case document* for your pins, selects and
+**PromptOn is config-fetch, not a proxy.** This SDK fetches a *prompt document* for your pins, selects and
 renders it locally, and sends **monitoring logs** back in batches. Your app calls the provider
 itself, with your own key and your own HTTP client — PromptOn is never in the request path, never
-sees your provider key, and if it goes down your app keeps generating on the last use cases it
+sees your provider key, and if it goes down your app keeps generating on the last prompts it
 received.
 
 ```
-your app ──load use case──▶ prompt + model + params          (use-case document, cached 10 s, ETag-polled)
+your app ──load prompt──▶ prompt + model + params          (prompt document, cached 10 s, ETag-polled)
    │
    ├──your key, your HTTP client──▶ OpenAI / OpenRouter / Anthropic / …
    │
@@ -42,16 +42,21 @@ const { PromptOn } = require("prompton-sdk");  // CommonJS
 import { PromptOn } from "prompton-sdk";
 
 const prompton = new PromptOn();                                  // reads PTN_API_KEY, PTN_HOST
-const useCase = prompton.useCase("greeting");                     // from memory, no network call
-const messages = useCase.messages({ name: "Ada" });               // your variables, rendered locally
+const prompt = prompton.prompt("greeting");                     // from memory, no network call
+const messages = prompt.messages({ name: "Ada" });               // your variables, rendered locally
+const request = prompt.request({ name: "Ada" });                 // provider path + body, not sent
 
-const answer = await useCase.track(() =>
-  openai.chat.completions.create({ model: useCase.model, messages, ...useCase.params }),
+const answer = await prompt.track(() =>
+  fetch(`https://openrouter.ai${request.path}`, {
+    method: request.method,
+    headers: { authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
+    body: JSON.stringify(request.body),
+  }),
   { variables: { name: "Ada" }, inputMessages: messages },
 );
 ```
 
-`UseCase.track()` times the call, builds the monitoring log and queues it. Whatever your function
+`Prompt.track()` times the call, builds the monitoring log and queues it. Whatever your function
 returns comes back unchanged; whatever it throws is logged as an error record and rethrown.
 
 A runnable version, which needs no server at all, is in [`examples/basic.mjs`](examples/basic.mjs):
@@ -69,16 +74,16 @@ Precedence is **explicit option → environment variable → default**.
 | `apiKey` | `PTN_API_KEY` | none | The project's runtime key, `ptn_<project>_…`. Without one the SDK makes no remote calls, works from disk and bundle only, and says so once |
 | `baseUrl` | `PTN_HOST` | `https://app.prompton.ai` | PromptOn host; `/api/v1` is appended unless it is already there |
 | `environment` | `PTN_ENVIRONMENT` | `production` | Which environment's pins to read. It is a request parameter, never a property of the key |
-| `project` | `PTN_PROJECT` | parsed from the API key | Names the disk-cache file and guards against a use-case document from another project |
-| `cacheTtlMs` | — | `10000` | How long a use-case document is served without revalidating, and the poll interval |
+| `project` | `PTN_PROJECT` | parsed from the API key | Names the disk-cache file and guards against a prompt document from another project |
+| `cacheTtlMs` | — | `10000` | How long a prompt document is served without revalidating, and the poll interval |
 | `requestTimeoutMs` | — | `5000` | Per-request timeout |
 | `initialFetchTimeoutMs` | — | `3000` | Timeout of the first fetch, which never blocks an LLM call |
 | `diskCache` | `PTN_DISK_CACHE` | on, in the OS cache directory | `true`, `false`, or an explicit path. The file is written atomically with an ETag sidecar |
-| `bundlePath` | `PTN_BUNDLE` | none | A use-case document file committed into the app, used when memory and disk are empty |
+| `bundlePath` | `PTN_BUNDLE` | none | A prompt document file committed into the app, used when memory and disk are empty |
 | `mode` | — | `live` | `live`, `offline` (disk and bundle only, no HTTP) or `test` (no HTTP, records captured) |
 | `hashEndUser` | — | `false` | Send `end_user_ref` as an unkeyed sha256 hex |
 | `redact` | — | none | `(record) => record`, applied to every record last, after truncation |
-| `payloadDefaults` | — | `{mode: "full", sampleRate: 1, maxBytes: 262144}` | Policy used when a use case declares none |
+| `payloadDefaults` | — | `{mode: "full", sampleRate: 1, maxBytes: 262144}` | Policy used when a prompt declares none |
 | `log.flushIntervalMs` | — | `2000` | Send a partial batch after this long |
 | `log.flushSize` | — | `100` | Send as soon as this many records are queued (hard cap per request: 200) |
 | `log.flushBytes` | — | `1000000` | Send as soon as the queue holds this many encoded bytes |
@@ -94,7 +99,7 @@ Precedence is **explicit option → environment variable → default**.
 const prompton = new PromptOn({
   apiKey: process.env.PTN_API_KEY,
   environment: process.env.NODE_ENV === "production" ? "production" : "staging",
-  bundlePath: new URL("./prompton/use-cases.production.json", import.meta.url).pathname,
+  bundlePath: new URL("./prompton/prompts.production.json", import.meta.url).pathname,
   hashEndUser: true,
 });
 ```
@@ -103,16 +108,16 @@ const prompton = new PromptOn({
 
 This is the part that matters. An LLM call must never fail because PromptOn did.
 
-**One use-case document, cached, polled.** `useCase()` is synchronous and reads memory. Inside the cache TTL
+**One prompt document, cached, polled.** `prompt()` is synchronous and reads memory. Inside the cache TTL
 (10 s by default) it makes no HTTP call at all. Past it, the next call starts a background
 revalidation with `If-None-Match` — a `304` costs nothing — and still answers from the document it
 already holds. A refresh never blocks an LLM call and never fails one.
 
 **Three tiers, in this order.** Memory, then a disk cache, then a bundle committed into the app:
 
-| Tier | When it is used | `UseCase.source` |
+| Tier | When it is used | `Prompt.source` |
 |---|---|---|
-| Memory | Always, for every use-case lookup | `remote` after a successful fetch |
+| Memory | Always, for every prompt lookup | `remote` after a successful fetch |
 | Disk | At start-up, before the first fetch returns; written atomically (temp file + rename) with an ETag sidecar | `disk` |
 | Bundle | At start-up when memory and disk are both empty. In serverless this is the primary fallback, not a nicety | `bundle` |
 
@@ -129,10 +134,10 @@ boot on a production bundle; the file records both and a mismatch is refused wit
 ```ts
 const prompton = new PromptOn();
 await prompton.refresh();
-prompton.exportUseCases("prompton/use-cases.production.json");
+prompton.exportPrompts("prompton/prompts.production.json");
 ```
 
-Export one file per environment (`use-cases.production.json`, `use-cases.staging.json`) and point
+Export one file per environment (`prompts.production.json`, `prompts.staging.json`) and point
 `bundlePath` at the one matching the process's environment. A single shared bundle is refused by the
 environment guard in whichever environment it was not exported from.
 
@@ -142,52 +147,79 @@ environment guard in whichever environment it was not exported from.
 |---|---|---|
 | Inside the cache TTL | Serves memory | Nothing; no HTTP call is made |
 | `304 Not Modified` | Keeps the document, clears the stale flag | Nothing |
-| `429` with `Retry-After` | Waits it out before contacting the server again, keeps serving | Nothing. `useCasesInfo().stale` turns `true` |
+| `429` with `Retry-After` | Waits it out before contacting the server again, keeps serving | Nothing. `promptsInfo().stale` turns `true` |
 | `5xx`, timeout, DNS failure, connection refused | Backs off ×2 from the cache TTL up to 5 minutes, keeps serving | Nothing |
-| A use-case document for the wrong environment or project | Refuses it, keeps polling | Nothing, plus one warning line |
+| A prompt document for the wrong environment or project | Refuses it, keeps polling | Nothing, plus one warning line |
 | PromptOn unreachable **and** nothing cached anywhere | — | `NotReadyError`: "PromptOn is unreachable and nothing is cached" |
-| Use case not in the use-case document | — | `UnknownUseCaseError` |
-| Use case has no live deployment here | — | `UnresolvedError`. Fix the deployment; **never** fall back to a hard-coded prompt |
-| Prompt name is not pinned | — | `UnknownPromptError`, carrying `promptNames`. There is no silent fallback to `default` |
+| Prompt key not in the prompt document | — | `UnknownPromptError` |
+| Prompt key has no live deployment here | — | `UnresolvedError`. Fix the deployment; **never** fall back to a hard-coded prompt |
+| Template is not pinned | — | `UnknownTemplateError`, carrying `templateNames`. There is no silent fallback to `default` |
 | A variable the template reads is missing | — | `MissingVariableError`, carrying `variable` |
 | Monitoring logs get `429` or any `5xx` | Retries the same batch with the same ids, honouring `Retry-After`, then backing off ×2 from 1 s to 5 min | Nothing |
 | Monitoring logs get `413` | Splits the batch in half and resends both halves | Nothing |
 | Monitoring logs get any other `4xx` | Drops the batch, counts it, logs once. Retrying a rejected batch only loses the ones behind it | Nothing |
 | The log queue is full | Drops the oldest and counts it | Nothing |
 | `log()` is handed a record with a field missing | Drops it, counts it in `droppedInvalid`, warns once | Nothing — unless `strictRecords` is on, which raises `InvalidRecordError` |
-| The record builder throws inside `UseCase.track()` | Drops the record and counts it | Nothing; your own return value or your own exception, untouched |
-| The prompt endpoint gets `429` or `5xx` | Serves the cached answer and stops calling until `Retry-After`, else backs off ×2 from the cache TTL to 5 min | Nothing, if that key was ever answered; otherwise the original `ApiError` |
+| The record builder throws inside `Prompt.track()` | Drops the record and counts it | Nothing; your own return value or your own exception, untouched |
+| The render endpoint gets `429` or `5xx` | Serves the cached answer and stops calling until `Retry-After`, else backs off ×2 from the cache TTL to 5 min | Nothing, if that key was ever answered; otherwise the original `ApiError` |
 
 Prove it before you ship: run your app with a wrong `PTN_HOST` and confirm that LLM calls still
-happen on the cached use-case document.
+happen on the cached prompt document.
 
-## Use cases
+## Prompts
 
 ```ts
-const useCase = prompton.useCase("diary_use_case", { prompt: "ko" });
+const prompt = prompton.prompt("diary_prompt_key");
 ```
 
-`params = use_case.default_params <- deployment.params` and
+`params = prompt.default_params <- deployment.params` and
 `providerOptions = model.provider_options <- deployment.provider_options`, both shallow merges where
 the right side wins and an override of `null` is kept as `null`.
 
 | Field | Meaning |
 |---|---|
-| `key`, `kind` | The key you asked for; `chat`, `text` or `embedding` |
-| `prompt`, `promptNames` | The chosen prompt name (`null` for an embedding use case) and every name this revision pins |
+| `key`, `kind` | The key you asked for; `chat`, `decision`, `text` or `embedding` |
+| `template`, `templateNames` | The chosen template name (`null` for an embedding prompt) and every name this revision pins |
 | `deployment` | The pin that produced this |
 | `promptVersion` | The pinned, immutable prompt version |
 | `model`, `modelId`, `provider` | The provider model string to send, the catalog UUID, and who serves it |
 | `params`, `providerOptions` | The effective merges above |
-| `source`, `etag` | `remote` / `disk` / `bundle` / `manual`, and the use-case document's ETag |
+| `api`, `requestPath` | Which provider API family to call, and the origin-relative provider request path |
+| `source`, `etag` | `remote` / `disk` / `bundle` / `manual`, and the prompt document's ETag |
 
 Rendering is per call:
 
 ```ts
-const messages = useCase.messages({ transcriptions, mode: "fresh" });
-const korean = useCase.messages({ transcriptions, mode: "fresh" }, { prompt: "ko" });
-const text = prompton.useCase("summarize").text({ items });
+const messages = prompt.messages({ transcriptions, mode: "fresh", language: "en" });
+const korean = prompt.messages({ transcriptions, mode: "fresh", language: "ko" });
+const text = prompton.prompt("summarize").text({ items });
+const request = prompt.request({ transcriptions, mode: "fresh", language: "en" });
 ```
+
+`prompt.request(variables, options?)` prepares the provider request without sending it:
+
+```ts
+{
+  api: "chat_completions" | "decisions",
+  method: "POST",
+  path: "/api/v1/chat/completions",
+  body: { model, messages, ...params }
+}
+```
+
+For Decision prompts, the body is `{ model, state, questions }` plus optional `provider`,
+`session_id`, `trace`, and `user`. Chat and Decision protected fields such as `model`, `messages`,
+`state`, `questions`, `provider`, and `usage` cannot be overridden through params.
+
+Prepared requests require schema v6 metadata and the immutable pinned version kind. Legacy schema v5
+documents remain readable with the existing messages/text APIs. Unsupported or mismatched provider
+paths fail explicitly. Request options support `template`, `params`, `providerOptions`, and Decision
+`session_id`, `trace`, `user` metadata. Chat omits null params; provider options preserve explicit null.
+Decision metadata values must be typed: session/user strings up to 256 characters, and trace objects.
+
+`Result.fromDecisions(raw)` preserves all typed answers and probabilities in its JSON content and
+keeps the full response in `result`. Pass `{ inputDecision: { state, questions } }` to `prompt.track`
+to record the native input. `renderPrompt()` also exposes the server's `decision` and prepared `request`.
 
 The template engine is the Liquid subset PromptOn allows: `{{ var }}` with `size`, `join` and
 `default`; `for` with `break`, `continue` and `forloop.*`; `if`/`elsif`/`else`; `unless`; `assign`.
@@ -196,14 +228,14 @@ empty string.
 
 ### The simple path
 
-`filledPrompt()` calls `POST /api/v1/use-cases/{key}/prompt`, which does the same thing on the server. It is the smoke
+`renderPrompt()` calls `POST /api/v1/prompts/{key}/render`, which does the same thing on the server. It is the smoke
 test and the low-traffic path — never a hot loop:
 
 ```ts
-const filled = await prompton.filledPrompt("greeting", { variables: { name: "Ada" } });
+const filled = await prompton.renderPrompt("greeting", { variables: { name: "Ada" } });
 ```
 
-It obeys the same rules: one request per cache TTL per (use case, prompt, environment) — one in
+It obeys the same rules: one request per cache TTL per (prompt, template, environment) — one in
 flight at a time, so a burst of concurrent calls costs a single request — rendered locally, and the
 cached answer served when the server answers `429`, `5xx` or nothing at all. A failure also pauses
 the key: the server is left alone until `Retry-After` has elapsed, or, absent that header and
@@ -216,14 +248,14 @@ touching the network.
 Three ways in.
 
 ```ts
-prompton.log(record, { useCase });   // queue a record you built yourself, returns immediately
+prompton.log(record, { template: prompt });   // queue a record you built yourself, returns immediately
 await prompton.flush();                 // send now and wait — shutdown, tests, scripts
-await useCase.track(call, meta);         // time a provider call and log it
+await prompt.track(call, meta);         // time a provider call and log it
 ```
 
 `log()` fills in `id` (a UUIDv7, because the server's column is one), `started_at`, `sdk`, and —
-when you pass a use case — the deployment and prompt evidence. It validates the five fields the
-server requires (`use_case`, `model`, `status`, `started_at`, plus the `id` it generated) and
+when you pass a prompt — the deployment and prompt evidence. It validates the five fields the
+server requires (`prompt_key`, `model`, `status`, `started_at`, plus the `id` it generated) and
 returns at once; nothing is sent on the calling path.
 
 **`log()` never throws.** A record the server would reject is dropped, counted in
@@ -233,7 +265,7 @@ successful LLM call into a failed request. Set `strictRecords: true` to raise
 wrapper below never raises from its logging half at all, `strictRecords` or not: an exception there
 would replace the provider's own error, which is the one you need to see.
 
-`UseCase.track(call, meta, extractResult?)` takes:
+`Prompt.track(call, meta, extractResult?)` takes:
 
 | `meta` field | Goes to |
 |---|---|
@@ -243,7 +275,7 @@ would replace the provider's own error, which is the one you need to see.
 | `traceId`, `sequence` | Ties the record to a job or a conversation |
 | `context` | `context`, ≤ 2 KB encoded — free-form tags such as language or plan |
 | `metadata` | `metadata`, ≤ 4 KB encoded — free app keys |
-| `params` | Layered over use-case evidence's params, for what was actually sent |
+| `params` | Layered over prompt evidence's params, for what was actually sent |
 | `id` | A UUIDv7 you pre-issued with `prompton.logId()` |
 
 `extractResult` maps your provider's response onto `{ content, toolCalls, finishReason, usage:
@@ -255,18 +287,18 @@ default treats the returned object as that shape already, and a returned string 
 | Field | Filled by |
 |---|---|
 | `id` | The SDK — a UUIDv7, and the idempotency key: a resend is counted as a duplicate, never stored twice |
-| `use_case`, `kind`, `model`, `model_id`, `provider` | Use-case evidence |
-| `deployment_id`, `deployment_revision`, `prompt`, `prompt_version_id` | Use-case evidence — this is the evidence that ties an answer to a pin |
+| `prompt_key`, `kind`, `model`, `model_id`, `provider` | Prompt evidence |
+| `deployment_id`, `deployment_revision`, `template`, `prompt_version_id` | Prompt evidence — this is the evidence that ties an answer to a pin |
 | `source` | `remote` / `disk` / `bundle` / `manual` |
 | `status`, `error` | `ok`, or `error` with `kind` (`http_4xx`, `http_5xx`, `rate_limited`, `timeout`, `transport`, `parse`, `app`), `status` and `message` |
 | `finish_reason`, `stop_kind` | The provider's raw reason, normalised to `stop` / `length` / `tool_call` / `content_filter` / `other` |
 | `input`, `output` | Your variables, messages and completion — subject to the payload policy below |
 | `usage` | `input_tokens`, `output_tokens`, `cost_usd`, `cost_source`, `raw` |
-| `latency_ms`, `started_at` | Measured by `UseCase.track()` |
+| `latency_ms`, `started_at` | Measured by `Prompt.track()` |
 | `trace_id`, `sequence`, `end_user_ref`, `context`, `metadata` | You |
 | `sdk` | `{name: "prompton-nodejs", version}` |
 
-**Payload policy.** Each use case carries one in the use-case document, and the SDK applies it *before* the
+**Payload policy.** Each prompt carries one in the prompt document, and the SDK applies it *before* the
 record is queued, so text that must not travel never does. `mode: "none"` drops `input`/`output`;
 `mode: "hash"` replaces them with a sha256 and a byte count; `mode: "full"` truncates to
 `max_bytes` (default 256 KB) — head and tail kept, middle replaced by `…[truncated N bytes]…`, never
@@ -280,10 +312,10 @@ splitting a multi-byte character. Sampling is a pure function of the record id, 
 
 ```ts
 const prompton = new PromptOn({ mode: "test" });
-prompton.loadUseCases(require("./fixtures/use-cases.json"));
+prompton.loadPrompts(require("./fixtures/prompts.json"));
 
-const useCase = prompton.useCase("greeting");
-await useCase.track(() => ({ content: "hi", finishReason: "stop" }));
+const prompt = prompton.prompt("greeting");
+await prompt.track(() => ({ content: "hi", finishReason: "stop" }));
 
 expect(prompton.logs[0].stop_kind).toBe("stop");   // captured, never sent
 ```
@@ -294,7 +326,7 @@ local development, and for proving the fallback path works.
 ## Housekeeping
 
 ```ts
-prompton.useCasesInfo();   // { etag, source, environment, project, fetchedAt, stale, ageSeconds }
+prompton.promptsInfo();   // { etag, source, environment, project, fetchedAt, stale, ageSeconds }
 prompton.stats();          // buffer counters: queued, sent, accepted, duplicates, dropped*
 await prompton.refresh();  // fetch once, now
 await prompton.close();    // stop the timers and flush what is queued

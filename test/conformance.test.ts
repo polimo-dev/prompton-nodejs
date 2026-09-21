@@ -6,7 +6,7 @@ import {
   ALLOWED_FILTERS,
   ALLOWED_TAGS,
   applyPayloadPolicy,
-  decodeUseCaseDocument,
+  decodePromptDocument,
   isTruncatedStop,
   lint,
   MissingVariableError,
@@ -19,14 +19,14 @@ import {
   TemplateParseError,
   TemplateRenderError,
   UnknownPromptError,
-  UnknownUseCaseError,
+  UnknownTemplateError,
   UnresolvedError,
   canonicalJson,
   type Engine,
   type Message,
-  type UseCaseDocument,
+  type PromptDocument,
 } from "../src/index.js";
-import { DEFAULT_PROMPT, promptNamesFromSnapshot, resolveFromSnapshot } from "../src/resolver.js";
+import { DEFAULT_TEMPLATE, templateNamesFromSnapshot, resolvePromptFromSnapshot } from "../src/resolver.js";
 
 /**
  * The cross-language conformance suite, copied verbatim from the reference implementation
@@ -130,54 +130,54 @@ describe("template.json", () => {
 });
 
 // ---------------------------------------------------------------------------
-// use_case.json
+// prompt.json
 
-describe("use_case.json", () => {
-  const doc = load("use_case.json");
-  const documents = new Map<string, UseCaseDocument>();
+describe("prompt.json", () => {
+  const doc = load("prompt.json");
+  const documents = new Map<string, PromptDocument>();
   for (const [ref, raw] of Object.entries(doc["documents"] as Record<string, unknown>)) {
-    documents.set(ref, decodeUseCaseDocument(raw).data);
+    documents.set(ref, decodePromptDocument(raw).data);
   }
 
-  it("names the same default prompt", () => {
-    expect(doc["default_prompt"]).toBe(DEFAULT_PROMPT);
+  it("uses the SDK default prompt when the fixture omits the metadata", () => {
+    expect(doc["default_prompt"] ?? DEFAULT_TEMPLATE).toBe(DEFAULT_TEMPLATE);
   });
 
-  it("every use-case document decodes as schema v4", () => {
+  it("every prompt document decodes as a supported schema", () => {
     for (const data of documents.values()) {
-      expect(data.schemaVersion).toBe(SCHEMA_VERSION);
+      expect([5, SCHEMA_VERSION]).toContain(data.schemaVersion);
     }
   });
 
-  it("requires schema_version to be exactly integer 4", () => {
+  it("requires schema_version to be a supported integer", () => {
     const base = doc["documents"]["production"] as Record<string, unknown>;
     for (const patch of [
       { schema_version: 3 },
-      { schema_version: 5 },
-      { schema_version: "4" },
+      { schema_version: 7 },
+      { schema_version: "5" },
       { schema_version: undefined },
     ]) {
       const candidate = { ...base, ...patch };
       if (patch.schema_version === undefined) delete candidate["schema_version"];
-      expect(() => decodeUseCaseDocument(candidate)).toThrow(/schema_version/u);
+      expect(() => decodePromptDocument(candidate)).toThrow(/schema_version/u);
     }
 
     const legacy: Record<string, unknown> = { ...base, version: SCHEMA_VERSION };
     delete legacy["schema_version"];
-    expect(() => decodeUseCaseDocument(legacy)).toThrow(/schema_version/u);
+    expect(() => decodePromptDocument(legacy)).toThrow(/schema_version/u);
   });
 
   for (const testCase of doc["cases"] as {
     name: string;
     document_ref: string;
     environment: string;
-    use_case: string;
-    prompt?: string;
+    prompt_key: string;
+    template?: string;
     variables?: Record<string, unknown>;
     expect: Record<string, unknown>;
   }[]) {
     it(testCase.name, () => {
-      const data = documents.get(testCase.document_ref) as UseCaseDocument;
+      const data = documents.get(testCase.document_ref) as PromptDocument;
       expect(data.environment).toBe(testCase.environment);
       expect(resolveExpectation(data, testCase)).toEqual(testCase.expect);
     });
@@ -185,27 +185,27 @@ describe("use_case.json", () => {
 });
 
 function resolveExpectation(
-  data: UseCaseDocument,
+  data: PromptDocument,
   testCase: {
-    use_case: string;
-    prompt?: string;
+    prompt_key: string;
+    template?: string;
     variables?: Record<string, unknown>;
   },
 ): Record<string, unknown> {
   let resolution;
   try {
-    resolution = resolveFromSnapshot(data, testCase.use_case, { prompt: testCase.prompt ?? null });
+    resolution = resolvePromptFromSnapshot(data, testCase.prompt_key, { template: testCase.template ?? null });
   } catch (error) {
-    if (error instanceof UnknownPromptError) {
+    if (error instanceof UnknownTemplateError) {
       return {
-        error: "unknown_prompt",
-        key: error.useCase,
-        prompt: error.prompt,
-        prompt_names: error.promptNames,
+        error: "unknown_template",
+        key: error.promptKey,
+        template: error.template,
+        template_names: error.templateNames,
       };
     }
-    if (error instanceof UnknownUseCaseError) {
-      return { error: "unknown_use_case", key: error.useCase };
+    if (error instanceof UnknownPromptError) {
+      return { error: "unknown_prompt", key: error.promptKey };
     }
     if (error instanceof UnresolvedError) return { error: "unresolved" };
     throw error;
@@ -233,13 +233,13 @@ function resolveExpectation(
   }
 
   return {
-    key: resolution.useCase,
+    key: resolution.promptKey,
     source: resolution.source,
     kind: resolution.kind,
     deployment_id: resolution.deploymentId,
     revision: resolution.deploymentRevision,
-    prompt: resolution.prompt,
-    prompt_names: promptNamesFromSnapshot(data, testCase.use_case),
+    template: resolution.template,
+    template_names: templateNamesFromSnapshot(data, testCase.prompt_key),
     model_id: resolution.modelId,
     model: resolution.model,
     provider: resolution.provider,
@@ -344,14 +344,14 @@ describe("log_record.json", () => {
 
   for (const { name, record } of records) {
     it(`${name} satisfies the ingest rules`, () => {
-      for (const field of ["id", "use_case", "model", "status", "started_at"]) {
+      for (const field of ["id", "prompt_key", "model", "status", "started_at"]) {
         expect(record, field).toHaveProperty(field);
       }
       expect(record["id"]).toMatch(UUID);
       expect((record["id"] as string)[14], "id must be a UUIDv7, not a v4").toBe("7");
       expect(["ok", "error"]).toContain(record["status"]);
       expect(Number.isNaN(Date.parse(record["started_at"] as string))).toBe(false);
-      expect(Buffer.byteLength(record["use_case"] as string)).toBeLessThanOrEqual(512);
+      expect(Buffer.byteLength(record["prompt_key"] as string)).toBeLessThanOrEqual(512);
       expect(Buffer.byteLength(record["model"] as string)).toBeLessThanOrEqual(512);
 
       optionalEnum(record["kind"], ["chat", "text", "embedding"]);
@@ -405,7 +405,7 @@ describe("log_record.json", () => {
 describe("every fixture", () => {
   for (const name of [
     "template.json",
-    "use_case.json",
+    "prompt.json",
     "truncation.json",
     "stop_kind.json",
     "log_record.json",

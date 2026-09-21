@@ -32,15 +32,15 @@ export interface PromptOnOptions {
   environment?: string;
   /** Project slug; parsed out of the API key when not given. Names the disk-cache file. */
   project?: string | null;
-  /** How long a use-case document is served without revalidating. Default 10 000 ms. */
+  /** How long a prompt document is served without revalidating. Default 10 000 ms. */
   cacheTtlMs?: number;
   /** Per-request timeout. Default 5000 ms. */
   requestTimeoutMs?: number;
-  /** Timeout of the very first use-case document fetch, which never blocks a generation. Default 3000 ms. */
+  /** Timeout of the very first prompt document fetch, which never blocks a generation. Default 3000 ms. */
   initialFetchTimeoutMs?: number;
   /** `true` (default) for the standard path, `false` to disable, or an explicit file path. */
   diskCache?: boolean | string;
-  /** A use-case document file committed into the app, used when memory and disk are empty. */
+  /** A prompt document file committed into the app, used when memory and disk are empty. */
   bundlePath?: string | null;
   /** `live` (default), `offline` (disk and bundle only) or `test` (no HTTP, logs captured). */
   mode?: Mode;
@@ -48,7 +48,7 @@ export interface PromptOnOptions {
   hashEndUser?: boolean;
   /** Applied to every record last, after truncation. Return the record to send. */
   redact?: ((record: LogRecord) => LogRecord | null | undefined) | null;
-  /** Payload policy used when the use-case document's use case declares none. */
+  /** Payload policy used when the prompt document's prompt declares none. */
   payloadDefaults?: Partial<NormalizedPolicy>;
   /**
    * Raise instead of dropping when {@link PromptOn.log} is handed a record the server would
@@ -58,7 +58,7 @@ export interface PromptOnOptions {
   strictRecords?: boolean;
   /** Monitoring-log buffer knobs. */
   log?: LogOptions;
-  /** Poll for use-case document changes in the background. Default `true` outside test mode. */
+  /** Poll for prompt document changes in the background. Default `true` outside test mode. */
   poll?: boolean;
   /** Flush the log buffer when the process is about to exit. Default `true`. */
   flushOnExit?: boolean;
@@ -166,7 +166,7 @@ export function projectFromApiKey(apiKey: string | null): string | null {
   return match ? (match[1] as string) : null;
 }
 
-/** Where a use-case document is cached when no explicit path is configured. */
+/** Where a prompt document is cached when no explicit path is configured. */
 export function defaultCacheDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env["PTN_CACHE_DIR"];
   if (explicit) return explicit;
@@ -199,7 +199,7 @@ function diskCachePath(
   if (typeof option === "string" && option !== "") return option;
   const configured = env["PTN_DISK_CACHE"];
   if (configured) return configured;
-  const name = `use-cases-${project ?? "default"}-${environment}.json`;
+  const name = `prompts-${project ?? "default"}-${environment}.json`;
   return join(defaultCacheDir(env), name);
 }
 

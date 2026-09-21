@@ -42,7 +42,7 @@ export interface PayloadOptions {
 const ERROR_MESSAGE_MAX = 2048;
 const SAMPLE_SCALE = 10000;
 
-/** The policy used when neither the use-case document nor the app supplies one. */
+/** The policy used when neither the prompt document nor the app supplies one. */
 export const DEFAULT_POLICY: NormalizedPolicy = {
   mode: "full",
   sampleRate: 1.0,

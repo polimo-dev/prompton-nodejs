@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { MissingVariableError, PromptOn, UnknownPromptError, UnknownUseCaseError, uuidv7 } from "../src/index.js";
+import { MissingVariableError, PromptOn, UnknownPromptError, UnknownTemplateError, uuidv7 } from "../src/index.js";
 import { recordingLogger, tempDir } from "./helpers.js";
 import { join } from "node:path";
 
@@ -13,7 +13,7 @@ import { join } from "node:path";
  * ```
  *
  * What it proves: the snapshot fetch and the conditional repoll, that local resolution agrees with
- * the server's own prompt endpoint for every use case and prompt name, that the error cases line
+ * the server's own render endpoint for the active default prompt, that the error cases line
  * up, and that a batch of monitoring logs is accepted once and counted as duplicates on a resend.
  */
 
@@ -25,8 +25,8 @@ interface ResolveResponse {
   key: string;
   kind: string;
   deployment: { id: string; revision: number };
-  prompt: string | null;
-  prompt_names: string[];
+  template: string | null;
+  template_names: string[];
   model: string;
   model_id: string;
   provider: string;
@@ -39,10 +39,10 @@ interface ResolveResponse {
 }
 
 async function serverResolve(
-  useCase: string,
+  prompt: string,
   body: Record<string, unknown>,
 ): Promise<{ status: number; body: any }> {
-  const response = await fetch(`${host}/api/v1/use-cases/${encodeURIComponent(useCase)}/prompt`, {
+  const response = await fetch(`${host}/api/v1/prompts/${encodeURIComponent(prompt)}/render`, {
     method: "POST",
     headers: { authorization: `Bearer ${String(apiKey)}`, "content-type": "application/json" },
     body: JSON.stringify(body),
@@ -73,7 +73,7 @@ suite("live fixture server", () => {
   });
 
   it("fetches the snapshot and gets a 304 on the repoll", async () => {
-    const info = client.useCasesInfo();
+    const info = client.promptsInfo();
     expect(info.source).toBe("remote");
     expect(info.project).toBe("sdkfixture");
     expect(info.environment).toBe("production");
@@ -81,48 +81,43 @@ suite("live fixture server", () => {
 
     const again = await client.refresh();
     expect(again.status).toBe("not_modified");
-    expect(client.useCasesInfo().stale).toBe(false);
+    expect(client.promptsInfo().stale).toBe(false);
   });
 
-  it("resolves greeting exactly as the server does, in both prompt names", async () => {
-    for (const [prompt, variables] of [
-      ["default", { name: "Ada" }],
-      ["ko", { name: "아다" }],
-    ] as const) {
-      const local = client.useCase("greeting", { prompt });
-      const remote = await serverResolve("greeting", {
-        environment: "production",
-        prompt,
-        variables,
-      });
-      expect(remote.status).toBe(200);
-      const body = remote.body as ResolveResponse;
+  it("resolves greeting exactly as the server does for the active default prompt", async () => {
+    const variables = { name: "Ada", language: "en" };
+    const local = client.prompt("greeting");
+    const remote = await serverResolve("greeting", {
+      environment: "production",
+      variables,
+    });
+    expect(remote.status).toBe(200);
+    const body = remote.body as ResolveResponse;
 
-      expect(body.key).toBe("greeting");
-      expect(body.source).toBe("remote");
-      expect(local.kind).toBe(body.kind);
-      expect(local.deployment.id).toBe(body.deployment.id);
-      expect(local.deployment.revision).toBe(body.deployment.revision);
-      expect(local.prompt).toBe(body.prompt);
-      expect(local.promptNames).toEqual(body.prompt_names);
-      expect(local.model).toBe(body.model);
-      expect(local.modelId).toBe(body.model_id);
-      expect(local.provider).toBe(body.provider);
-      expect(local.params).toEqual(body.params);
-      expect(local.providerOptions).toEqual(body.provider_options);
-      expect(local.promptVersion?.id).toBe(body.prompt_version?.id);
-      expect(local.promptVersion?.number).toBe(body.prompt_version?.number);
+    expect(body.key).toBe("greeting");
+    expect(body.source).toBe("remote");
+    expect(local.kind).toBe(body.kind);
+    expect(local.deployment.id).toBe(body.deployment.id);
+    expect(local.deployment.revision).toBe(body.deployment.revision);
+    expect(local.template).toBe(body.template);
+    expect(local.templateNames).toEqual(body.template_names);
+    expect(local.model).toBe(body.model);
+    expect(local.modelId).toBe(body.model_id);
+    expect(local.provider).toBe(body.provider);
+    expect(local.params).toEqual(body.params);
+    expect(local.providerOptions).toEqual(body.provider_options);
+    expect(local.promptVersion?.id).toBe(body.prompt_version?.id);
+    expect(local.promptVersion?.number).toBe(body.prompt_version?.number);
 
-      const rendered = local.messages(variables);
-      expect(rendered.map((m) => ({ role: m.role, content: m.content }))).toEqual(body.messages);
+    const rendered = local.messages(variables);
+    expect(rendered.map((m) => ({ role: m.role, content: m.content }))).toEqual(body.messages);
 
-      const filled = await client.filledPrompt("greeting", { prompt, variables });
-      expect(filled.messages).toEqual(body.messages);
-    }
+    const filled = await client.renderPrompt("greeting", { variables });
+    expect(filled.messages).toEqual(body.messages);
   });
 
   it("resolves summarize exactly as the server does", async () => {
-    const local = client.useCase("summarize");
+    const local = client.prompt("summarize");
     const remote = await serverResolve("summarize", {
       environment: "production",
       variables: { items: ["alpha", "beta", "gamma"] },
@@ -139,7 +134,7 @@ suite("live fixture server", () => {
   });
 
   it("resolves embed exactly as the server does, with no prompt at all", async () => {
-    const local = client.useCase("embed");
+    const local = client.prompt("embed");
     const remote = await serverResolve("embed", { environment: "production" });
     expect(remote.status).toBe(200);
     const body = remote.body as ResolveResponse;
@@ -147,40 +142,38 @@ suite("live fixture server", () => {
     expect(body.key).toBe("embed");
     expect(body.source).toBe("remote");
     expect(local.kind).toBe("embedding");
-    expect(local.prompt).toBeNull();
-    expect(body.prompt).toBeNull();
+    expect(local.template).toBeNull();
+    expect(body.template).toBeNull();
     expect(local.promptVersion).toBeNull();
     expect(body.prompt_version).toBeNull();
-    expect(local.promptNames).toEqual(body.prompt_names);
+    expect(local.templateNames).toEqual(body.template_names);
     expect(local.model).toBe(body.model);
     expect(local.modelId).toBe(body.model_id);
   });
 
   it("agrees with the server on every error case", async () => {
-    expect(() => client.useCase("does_not_exist")).toThrowError(UnknownUseCaseError);
-    const unknownUseCase = await serverResolve("does_not_exist", { environment: "production" });
-    expect(unknownUseCase.status).toBe(404);
-    expect(unknownUseCase.body.error.details.key).toBe("does_not_exist");
+    expect(() => client.prompt("does_not_exist")).toThrowError(UnknownPromptError);
+    const unknownPrompt = await serverResolve("does_not_exist", { environment: "production" });
+    expect(unknownPrompt.status).toBe(404);
+    expect(unknownPrompt.body.error.details.key).toBe("does_not_exist");
 
     try {
-      client.useCase("greeting", { prompt: "fr" });
+      client.prompt("greeting", { template: "fr" });
       expect.unreachable("should have thrown");
     } catch (error) {
-      expect(error).toBeInstanceOf(UnknownPromptError);
+      expect(error).toBeInstanceOf(UnknownTemplateError);
       const remote = await serverResolve("greeting", {
         environment: "production",
-        prompt: "fr",
+        template: "fr",
         variables: {},
       });
-      expect(remote.status).toBe(404);
-      expect(remote.body.error.details.reason).toBe("unknown_prompt");
-      expect((error as UnknownPromptError).promptNames).toEqual(
-        remote.body.error.details.prompt_names,
-      );
+      expect(remote.status).toBe(400);
+      expect(remote.body.error.code).toBe("invalid_request");
+      expect((error as UnknownTemplateError).templateNames).toEqual(["default", "ko"]);
     }
 
     try {
-      client.useCase("greeting").messages({});
+      client.prompt("greeting").messages({});
       expect.unreachable("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(MissingVariableError);
@@ -204,7 +197,7 @@ suite("live fixture server", () => {
     });
     const result = await stray.ready();
     expect(result.status).toBe("failed");
-    expect(() => stray.useCase("greeting")).toThrowError(/unreachable and nothing is cached/u);
+    expect(() => stray.prompt("greeting")).toThrowError(/unreachable and nothing is cached/u);
     await stray.close(100);
   });
 
@@ -221,11 +214,11 @@ suite("live fixture server", () => {
     expect(result.status).toBe("failed");
     await bad.close(100);
 
-    expect(client.useCase("greeting").model).toBeTruthy();
+    expect(client.prompt("greeting").model).toBeTruthy();
   });
 
   it("sends a batch of monitoring logs and counts a resend as duplicates", async () => {
-    const useCase = client.useCase("greeting");
+    const prompt = client.prompt("greeting");
     const ids = [uuidv7(), uuidv7()];
     const startedAt = new Date().toISOString();
 
@@ -242,7 +235,7 @@ suite("live fixture server", () => {
           usage: { input_tokens: 8, output_tokens: 5, cost_source: "unknown" },
           trace_id: "prompton-nodejs-integration",
         },
-        { useCase },
+        { prompt },
       );
     }
 
@@ -257,8 +250,8 @@ suite("live fixture server", () => {
       body: JSON.stringify({
         logs: ids.map((id) => ({
           id,
-          use_case: "greeting",
-          model: useCase.model,
+          prompt_key: "greeting",
+          model: prompt.model,
           status: "ok",
           started_at: startedAt,
         })),

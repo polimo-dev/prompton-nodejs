@@ -2,25 +2,27 @@
  * The official PromptOn SDK for Node.js.
  *
  * PromptOn is the control plane for an app's LLM prompts, and it is config-fetch, not a proxy:
- * this SDK fetches use cases, renders locally, and batches monitoring
+ * this SDK fetches prompts, renders locally, and batches monitoring
  * logs back. Your app calls the provider itself, with its own key and its own HTTP client, and
- * keeps running on the last use cases it received when PromptOn is unreachable.
+ * keeps running on the last prompts it received when PromptOn is unreachable.
  *
  * ```ts
  * import { PromptOn } from "prompton-sdk";
  *
  * const prompton = new PromptOn();
- * const useCase = prompton.useCase("greeting");
- * const messages = useCase.messages({ name: "Ada" });
+ * const prompt = prompton.prompt("greeting");
+ * const messages = prompt.messages({ name: "Ada" });
  * ```
  */
 
-export { PromptOn, UseCase } from "./client.js";
+export { PromptOn, Prompt } from "./client.js";
 export type {
   LogOptions,
-  FilledPrompt,
-  FilledPromptOptions,
-  UseCaseOptions,
+  PreparedRequest,
+  PreparedRequestOptions,
+  RenderedPrompt,
+  RenderPromptOptions,
+  PromptOptions,
 } from "./client.js";
 
 export { DEFAULT_HOST, apiBase, defaultCacheDir, projectFromApiKey, resolveConfig } from "./config.js";
@@ -33,11 +35,12 @@ export {
   MissingVariableError,
   NoTemplateError,
   NotReadyError,
+  PreparedRequestError,
   PromptOnError,
   TemplateParseError,
   TemplateRenderError,
   UnknownPromptError,
-  UnknownUseCaseError,
+  UnknownTemplateError,
   UnresolvedError,
 } from "./errors.js";
 export type { PromptOnErrorCode } from "./errors.js";
@@ -54,17 +57,18 @@ export {
 } from "./template.js";
 export type { Engine, LintReason, LintResult, Message, Variables } from "./template.js";
 
-export { decodeUseCaseDocument, decodeUseCaseDocumentJson, SCHEMA_VERSION } from "./snapshotData.js";
+export { decodePromptDocument, decodePromptDocumentJson, SCHEMA_VERSION } from "./snapshotData.js";
 export type {
   DecodeResult,
   DecodeWarning,
   InputVariable,
   PayloadPolicy,
-  UseCaseDocument,
-  UseCaseDeployment,
-  UseCaseModel,
-  UseCasePromptVersion,
-  UseCaseDefinition,
+  PromptDocument,
+  PromptDeployment,
+  PromptModel,
+  PromptVersion,
+  PromptDefinition,
+  DecisionTemplate,
 } from "./snapshotData.js";
 
 export {
@@ -102,8 +106,8 @@ export { backoffMs } from "./buffer.js";
 export type { BufferStats, FlushResult, RejectedRecord, SendResult, Sender } from "./buffer.js";
 
 export type { RefreshResult } from "./snapshot.js";
-export type { UseCaseDocumentEntry, UseCasesInfo } from "./store.js";
-export { loadUseCaseDocumentFile, writeUseCaseDocumentFile } from "./store.js";
+export type { PromptDocumentEntry, PromptsInfo } from "./store.js";
+export { loadPromptDocumentFile, writePromptDocumentFile } from "./store.js";
 
 export { consoleLogger, silentLogger } from "./logger.js";
 export type { Logger } from "./logger.js";

@@ -46,7 +46,7 @@ describe("configuration precedence", () => {
       { apiKey: "ptn_heydiary_abc", environment: "staging" },
       { PTN_CACHE_DIR: "/var/cache/x" },
     );
-    expect(config.diskCachePath).toBe("/var/cache/x/use-cases-heydiary-staging.json");
+    expect(config.diskCachePath).toBe("/var/cache/x/prompts-heydiary-staging.json");
   });
 
   it("can turn the disk cache off, or point it anywhere", () => {

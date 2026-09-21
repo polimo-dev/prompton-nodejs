@@ -81,9 +81,28 @@ export class Result implements ResultLike {
       result: answer,
     });
   }
+
+  static fromDecisions(answer: unknown): Result {
+    const answers = get(answer, "answers");
+    const usage = get(answer, "usage");
+    return new Result({
+      content: answers === undefined ? null : JSON.stringify(answers, null, 2),
+      finishReason: "stop",
+      stopKind: "stop",
+      usage: {
+        inputTokens: numberOrNull(get(usage, "input_tokens")),
+        outputTokens: numberOrNull(get(usage, "output_tokens")),
+        raw: usage,
+      },
+      costUsd: numberOrNull(get(usage, "cost")),
+      costSource: "provider",
+      modelUsed: stringOrNull(get(answer, "model")),
+      result: answer,
+    });
+  }
 }
 
-/** Everything about this particular call that is not in the use-case lookup or the result. */
+/** Everything about this particular call that is not in the prompt lookup or the result. */
 export interface LogMeta {
   /** A pre-issued UUIDv7; one is generated when absent. */
   id?: string;
@@ -91,8 +110,10 @@ export interface LogMeta {
   variables?: Record<string, unknown> | null;
   /** The final message list sent to the provider, after the app attached any history. */
   inputMessages?: Message[] | Record<string, unknown>[] | null;
-  /** The final prompt string, for a text use case. */
+  /** The final prompt string, for a text prompt. */
   inputText?: string | null;
+  /** The rendered native Decision state and questions sent to the provider. */
+  inputDecision?: { state: unknown; questions: Record<string, unknown> } | null;
   /** A stable pseudonymous id for the end user. Never a name or an email. */
   endUserRef?: string | null;
   /** Ties this generation to a job, request or conversation. */
@@ -163,10 +184,10 @@ export function buildRecord(input: BuildInput): LogRecord {
 
   const record: LogRecord = {
     id: input.id,
-    use_case: r.useCase,
+    prompt_key: r.promptKey,
     deployment_id: r.deploymentId,
     deployment_revision: r.deploymentRevision,
-    prompt: r.prompt,
+    template: r.template,
     prompt_version_id: r.promptVersionId,
     model_id: r.modelId,
     source: r.source,
@@ -218,7 +239,7 @@ export function completeRecord(
   out["sdk"] ??= sdkBlock();
 
   if (resolution) {
-    out["use_case"] ??= resolution.useCase;
+    out["prompt_key"] ??= resolution.promptKey;
     out["kind"] ??= resolution.kind;
     out["model"] ??= resolution.model;
     out["source"] ??= resolution.source;
@@ -226,7 +247,7 @@ export function completeRecord(
     if (resolution.deploymentRevision !== null) {
       out["deployment_revision"] ??= resolution.deploymentRevision;
     }
-    if (resolution.prompt !== null) out["prompt"] ??= resolution.prompt;
+    if (resolution.template !== null) out["template"] ??= resolution.template;
     if (resolution.promptVersionId !== null) {
       out["prompt_version_id"] ??= resolution.promptVersionId;
     }
@@ -234,7 +255,7 @@ export function completeRecord(
     if (resolution.provider !== null) out["provider"] ??= resolution.provider;
   }
 
-  for (const field of ["use_case", "model", "status", "started_at"]) {
+  for (const field of ["prompt_key", "model", "status", "started_at"]) {
     const value = out[field];
     if (value === null || value === undefined || value === "") {
       throw new InvalidRecordError(`monitoring log is missing the required field ${field}`);
@@ -283,6 +304,7 @@ function buildInputBlock(meta: LogMeta): Record<string, unknown> | null {
     input["messages"] = meta.inputMessages;
   }
   if (typeof meta.inputText === "string") input["text"] = meta.inputText;
+  if (meta.inputDecision !== null && meta.inputDecision !== undefined) input["decision"] = meta.inputDecision;
   return Object.keys(input).length === 0 ? null : input;
 }
 

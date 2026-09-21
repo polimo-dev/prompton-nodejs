@@ -1,18 +1,18 @@
-import { UnknownPromptError, UnknownUseCaseError, UnresolvedError } from "./errors.js";
-import type { PayloadPolicy, UseCaseDocument } from "./snapshotData.js";
+import { UnknownPromptError, UnknownTemplateError, UnresolvedError } from "./errors.js";
+import type { DecisionTemplate, PayloadPolicy, PromptDocument } from "./snapshotData.js";
 import type { Engine, Message } from "./template.js";
 
 /**
- * Local resolution: snapshot + use case key (+ prompt name) → which model, params and prompt
+ * Local resolution: snapshot + prompt key (+ template name) → which model, params and template
  * version to use. This is exactly what the prompt endpoint does on the server, minus the rendering.
  *
  * A deployment revision is a pin, not a router: no rules, no conditions, no weights. The only
- * selection axis at request time is the prompt name; the environment decided which snapshot was
+ * selection axis at request time is the template name; the environment decided which snapshot was
  * fetched.
  */
 
-/** The name used when a call asks for no prompt. */
-export const DEFAULT_PROMPT = "default";
+/** The name used when a call asks for no template. */
+export const DEFAULT_TEMPLATE = "default";
 
 /** Where the snapshot behind a resolution came from. */
 export type ResolutionSource = "remote" | "disk" | "bundle" | "manual";
@@ -25,17 +25,21 @@ export interface ResolutionWarning {
 
 /** "What to use for this call." */
 export interface Resolution {
-  /** The resolved use case key. */
-  useCase: string;
+  /** The resolved prompt key. */
+  promptKey: string;
   /** `chat`, `text` or `embedding`. */
   kind: string;
-  /** The chosen prompt name; `null` for an embedding use case. */
-  prompt: string | null;
-  /** Every prompt name this deployment pins, sorted. */
-  availablePrompts: string[];
+  /** The immutable pinned version kind. Null for legacy schema v5 prompt documents. */
+  pinnedKind: string | null;
+  /** The chosen template name; `null` for an embedding prompt. */
+  template: string | null;
+  /** Every template name this deployment pins, sorted. */
+  availableTemplates: string[];
   /** The deployment revision that produced this resolution. */
   deploymentId: string | null;
   deploymentRevision: number | null;
+  api: string | null;
+  requestPath: string | null;
   /** The pinned prompt version. */
   promptVersionId: string | null;
   promptVersionNumber: number | null;
@@ -47,7 +51,7 @@ export interface Resolution {
   model: string | null;
   /** The provider that serves the model, e.g. `openrouter`. */
   provider: string | null;
-  /** `use_case.default_params` overridden by `deployment.params`. */
+  /** `prompt_key.default_params` overridden by `deployment.params`. */
   params: Record<string, unknown>;
   /** `model.provider_options` overridden by `deployment.provider_options`. */
   providerOptions: Record<string, unknown>;
@@ -55,7 +59,9 @@ export interface Resolution {
   messages: Message[] | null;
   /** The raw text template, before rendering; `null` unless the kind is `text`. */
   textTemplate: string | null;
-  /** The payload policy the monitoring-log buffer applies to this use case's records. */
+  /** The raw Decisions state/questions template, before rendering; `null` unless the kind is `decision`. */
+  decision: DecisionTemplate | null;
+  /** The payload policy the monitoring-log buffer applies to this prompt's records. */
   payloadPolicy: PayloadPolicy | null;
   /** Whether the snapshot came from the network, the disk cache or a bundled file. */
   source: ResolutionSource;
@@ -64,41 +70,41 @@ export interface Resolution {
   warnings: ResolutionWarning[];
 }
 
-/** Options for looking up a use case in a decoded document. */
-export interface UseCaseLookupOptions {
-  prompt?: string | null;
+/** Options for looking up a prompt in a decoded document. */
+export interface PromptLookupOptions {
+  template?: string | null;
   source?: ResolutionSource;
   etag?: string | null;
 }
 
 /**
- * Resolves a use case against a decoded snapshot.
+ * Resolves a prompt against a decoded snapshot.
  *
- * Throws {@link UnknownUseCaseError}, {@link UnresolvedError} or {@link UnknownPromptError} — a
+ * Throws {@link UnknownPromptError}, {@link UnresolvedError} or {@link UnknownTemplateError} — a
  * 404 from any of them is a bug in the deployment or the call, never a reason to fall back to a
  * hard-coded prompt.
  */
-export function resolveFromSnapshot(
-  snapshot: UseCaseDocument,
-  useCaseKey: string,
-  options: UseCaseLookupOptions = {},
+export function resolvePromptFromSnapshot(
+  snapshot: PromptDocument,
+  promptKey: string,
+  options: PromptLookupOptions = {},
 ): Resolution {
-  const useCase = snapshot.useCases[useCaseKey];
-  if (!useCase) throw new UnknownUseCaseError(useCaseKey);
+  const prompt = snapshot.prompts[promptKey];
+  if (!prompt) throw new UnknownPromptError(promptKey);
 
-  const deployment = useCase.deployment;
-  if (!deployment) throw new UnresolvedError(useCaseKey);
+  const deployment = prompt.deployment;
+  if (!deployment) throw new UnresolvedError(promptKey);
 
-  const availablePrompts = Object.keys(deployment.promptPins).sort();
-  const isEmbedding = useCase.kind === "embedding";
+  const availableTemplates = Object.keys(deployment.templatePins).sort();
+  const isEmbedding = prompt.kind === "embedding";
 
   let promptName: string | null = null;
   let versionId: string | null = null;
   if (!isEmbedding) {
-    promptName = options.prompt ?? DEFAULT_PROMPT;
-    const pinned = deployment.promptPins[promptName];
+    promptName = options.template ?? DEFAULT_TEMPLATE;
+    const pinned = deployment.templatePins[promptName];
     if (pinned === undefined) {
-      throw new UnknownPromptError(useCaseKey, promptName, availablePrompts);
+      throw new UnknownTemplateError(promptKey, promptName, availableTemplates);
     }
     versionId = pinned;
   }
@@ -113,24 +119,30 @@ export function resolveFromSnapshot(
     warnings.push({ kind: "missing_model", detail: deployment.modelId });
   }
 
+  const runtimeKind = version?.kind ?? prompt.kind;
+
   return {
-    useCase: useCase.key,
-    kind: useCase.kind,
-    prompt: promptName,
-    availablePrompts: isEmbedding ? [] : availablePrompts,
+    promptKey: prompt.key,
+    kind: runtimeKind,
+    pinnedKind: version?.kind ?? null,
+    template: promptName,
+    availableTemplates: isEmbedding ? [] : availableTemplates,
     deploymentId: deployment.id,
     deploymentRevision: deployment.revision,
+    api: deployment.api,
+    requestPath: deployment.requestPath,
     promptVersionId: version?.id ?? null,
     promptVersionNumber: version?.number ?? null,
     engine: version?.engine ?? null,
     modelId: model?.id ?? null,
     model: model?.modelId ?? null,
     provider: model?.provider ?? null,
-    params: mergeParams(useCase.defaultParams, deployment.params),
+    params: mergeParams(prompt.defaultParams, deployment.params),
     providerOptions: mergeParams(model?.providerOptions, deployment.providerOptions),
-    messages: useCase.kind === "chat" ? (version?.messages ?? null) : null,
-    textTemplate: useCase.kind === "text" ? (version?.textTemplate ?? null) : null,
-    payloadPolicy: useCase.payloadPolicy,
+    messages: runtimeKind === "chat" ? (version?.messages ?? null) : null,
+    textTemplate: runtimeKind === "text" ? (version?.textTemplate ?? null) : null,
+    decision: runtimeKind === "decision" ? (version?.decision ?? null) : null,
+    payloadPolicy: prompt.payloadPolicy,
     source: options.source ?? "remote",
     etag: options.etag ?? null,
     warnings,
@@ -138,14 +150,14 @@ export function resolveFromSnapshot(
 }
 
 /**
- * The prompt names this use case's live deployment pins, sorted. Empty when there is no
- * deployment. These are exactly the values `useCase()` accepts as a prompt name.
+ * The template names this prompt's live deployment pins, sorted. Empty when there is no
+ * deployment. These are exactly the values `prompt()` accepts as a template name.
  */
-export function promptNamesFromSnapshot(snapshot: UseCaseDocument, useCaseKey: string): string[] {
-  const useCase = snapshot.useCases[useCaseKey];
-  if (!useCase) throw new UnknownUseCaseError(useCaseKey);
-  if (!useCase.deployment) return [];
-  return Object.keys(useCase.deployment.promptPins).sort();
+export function templateNamesFromSnapshot(snapshot: PromptDocument, promptKey: string): string[] {
+  const prompt = snapshot.prompts[promptKey];
+  if (!prompt) throw new UnknownPromptError(promptKey);
+  if (!prompt.deployment) return [];
+  return Object.keys(prompt.deployment.templatePins).sort();
 }
 
 /**

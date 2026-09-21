@@ -4,7 +4,7 @@ import {
   ApiError,
   MissingVariableError,
   PromptOn,
-  UnknownPromptError,
+  UnknownTemplateError,
   UnresolvedError,
 } from "../src/index.js";
 import { fakeFetch, recordingLogger, snapshotDocument, snapshotResponse } from "./helpers.js";
@@ -24,8 +24,8 @@ const RESOLVE_BODY = {
   key: "greeting",
   kind: "chat",
   deployment: { id: "0198f2a1-0000-7000-8000-00000000d001", revision: 3 },
-  prompt: "default",
-  prompt_names: ["default", "ko"],
+  template: "default",
+  template_names: ["default", "ko"],
   model_id: "0198f2a1-0000-7000-8000-00000000e001",
   model: "openai/gpt-4o-mini",
   provider: "openrouter",
@@ -66,34 +66,35 @@ function make(fetch: typeof globalThis.fetch, options = {}): PromptOn {
   return client;
 }
 
-describe("filledPrompt", () => {
+describe("renderPrompt", () => {
   it("asks the server to render variables", async () => {
     const fetch = fakeFetch((url, init) => {
-      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
       const body = JSON.parse(init?.body as string) as { variables?: { name?: string } };
       return new Response(JSON.stringify(renderedResolveBody(body.variables?.name ?? "")), { status: 200 });
     });
     const client = make(fetch);
-    const resolved = await client.filledPrompt("greeting", { variables: { name: "Ada" } });
+    const resolved = await client.renderPrompt("greeting", { variables: { name: "Ada" } });
 
     expect(resolved.model).toBe("openai/gpt-4o-mini");
     expect(resolved.key).toBe("greeting");
+    expect(resolved.template).toBe("default");
     expect(resolved.source).toBe("remote");
     expect(resolved.params).toEqual({ temperature: 0.2 });
     expect(resolved.messages?.[1]?.content).toBe("Say hello to Ada.");
 
-    const post = fetch.calls.find((call) => call.url.includes("/prompt"));
-    expect(post?.url).toBe("http://ptn.test/api/v1/use-cases/greeting/prompt");
+    const post = fetch.calls.find((call) => call.url.includes("/render"));
+    expect(post?.url).toBe("http://ptn.test/api/v1/prompts/greeting/render");
     expect(JSON.parse(post?.init?.body as string)).toEqual({
       environment: "production",
-      prompt: "default",
+      template: "default",
       variables: { name: "Ada" },
     });
   });
 
   it("keeps server-rendered variables out of the raw-template cache", async () => {
     const fetch = fakeFetch((url, init) => {
-      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
       const body = JSON.parse(init?.body as string) as { variables?: { name?: string } };
       return new Response(
         JSON.stringify(
@@ -103,27 +104,27 @@ describe("filledPrompt", () => {
       );
     });
     const client = make(fetch);
-    const raw = await client.filledPrompt("greeting");
-    const first = await client.filledPrompt("greeting", { variables: { name: "Ada" } });
-    const second = await client.filledPrompt("greeting", { variables: { name: "Grace" } });
+    const raw = await client.renderPrompt("greeting");
+    const first = await client.renderPrompt("greeting", { variables: { name: "Ada" } });
+    const second = await client.renderPrompt("greeting", { variables: { name: "Grace" } });
 
     expect(raw.messages?.[1]?.content).toBe("Say hello to {{ name }}.");
     expect(first.messages?.[1]?.content).toBe("Say hello to Ada.");
     expect(second.messages?.[1]?.content).toBe("Say hello to Grace.");
     const bodies = fetch.calls
-      .filter((call) => call.url.includes("/prompt"))
+      .filter((call) => call.url.includes("/render"))
       .map((call) => JSON.parse(call.init?.body as string));
     expect(bodies).toEqual([
-      { environment: "production", prompt: "default" },
-      { environment: "production", prompt: "default", variables: { name: "Ada" } },
-      { environment: "production", prompt: "default", variables: { name: "Grace" } },
+      { environment: "production", template: "default" },
+      { environment: "production", template: "default", variables: { name: "Ada" } },
+      { environment: "production", template: "default", variables: { name: "Grace" } },
     ]);
   });
 
   it("serves the cached answer when the server answers 500", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
-      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       if (resolveCalls === 1) return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
       return new Response(JSON.stringify({ error: { code: "internal_error", message: "boom" } }), {
@@ -131,9 +132,9 @@ describe("filledPrompt", () => {
       });
     });
     const client = make(fetch, { cacheTtlMs: 1 });
-    await client.filledPrompt("greeting");
+    await client.renderPrompt("greeting");
     await new Promise((resolve) => setTimeout(resolve, 5));
-    const again = await client.filledPrompt("greeting");
+    const again = await client.renderPrompt("greeting");
 
     expect(resolveCalls).toBe(2);
     expect(again.messages?.[1]?.content).toBe("Say hello to {{ name }}.");
@@ -142,7 +143,7 @@ describe("filledPrompt", () => {
   it("waits out Retry-After before contacting the server again", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
-      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       if (resolveCalls === 1) return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
       return new Response(
@@ -153,11 +154,11 @@ describe("filledPrompt", () => {
       );
     });
     const client = make(fetch, { cacheTtlMs: 20 });
-    await client.filledPrompt("greeting");
+    await client.renderPrompt("greeting");
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     for (let i = 0; i < 20; i += 1) {
-      const answer = await client.filledPrompt("greeting");
+      const answer = await client.renderPrompt("greeting");
       expect(answer.messages?.[1]?.content).toBe("Say hello to {{ name }}.");
     }
 
@@ -167,7 +168,7 @@ describe("filledPrompt", () => {
   it("backs off exponentially from the TTL when the server sends no Retry-After", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
-      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       if (resolveCalls === 1) return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
       return new Response(JSON.stringify({ error: { code: "internal_error", message: "boom" } }), {
@@ -175,26 +176,26 @@ describe("filledPrompt", () => {
       });
     });
     const client = make(fetch, { cacheTtlMs: 40 });
-    await client.filledPrompt("greeting");
+    await client.renderPrompt("greeting");
     await new Promise((resolve) => setTimeout(resolve, 50));
 
-    await client.filledPrompt("greeting");
+    await client.renderPrompt("greeting");
     expect(resolveCalls).toBe(2);
-    await client.filledPrompt("greeting");
+    await client.renderPrompt("greeting");
     expect(resolveCalls).toBe(2);
 
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await client.filledPrompt("greeting");
+    await client.renderPrompt("greeting");
     expect(resolveCalls).toBe(3);
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await client.filledPrompt("greeting");
+    await client.renderPrompt("greeting");
     expect(resolveCalls).toBe(3);
   });
 
   it("does not hammer the server when it has nothing cached to serve", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
-      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       return new Response(
         JSON.stringify({ error: { code: "unavailable", message: "down" } }),
@@ -204,7 +205,7 @@ describe("filledPrompt", () => {
     const client = make(fetch, { cacheTtlMs: 20 });
 
     for (let i = 0; i < 5; i += 1) {
-      await expect(client.filledPrompt("greeting")).rejects.toBeInstanceOf(ApiError);
+      await expect(client.renderPrompt("greeting")).rejects.toBeInstanceOf(ApiError);
     }
     expect(resolveCalls).toBe(1);
   });
@@ -212,16 +213,16 @@ describe("filledPrompt", () => {
   it("collapses concurrent calls for matching variables into a single request", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url, init) => {
-      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       const body = JSON.parse(init?.body as string) as { variables?: { name?: string } };
       return new Response(JSON.stringify(renderedResolveBody(body.variables?.name ?? "")), { status: 200 });
     });
     const client = make(fetch);
     const answers = await Promise.all([
-      client.filledPrompt("greeting", { variables: { name: "Ada" } }),
-      client.filledPrompt("greeting", { variables: { name: "Ada" } }),
-      client.filledPrompt("greeting", { variables: { name: "Ada" } }),
+      client.renderPrompt("greeting", { variables: { name: "Ada" } }),
+      client.renderPrompt("greeting", { variables: { name: "Ada" } }),
+      client.renderPrompt("greeting", { variables: { name: "Ada" } }),
     ]);
 
     expect(resolveCalls).toBe(1);
@@ -235,7 +236,7 @@ describe("filledPrompt", () => {
   it("gives concurrent waiters the cached answer when the shared request fails", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
-      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
+      if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
       resolveCalls += 1;
       if (resolveCalls === 1) return new Response(JSON.stringify(RESOLVE_BODY), { status: 200 });
       return new Response(JSON.stringify({ error: { code: "unavailable", message: "down" } }), {
@@ -243,13 +244,13 @@ describe("filledPrompt", () => {
       });
     });
     const client = make(fetch, { cacheTtlMs: 20 });
-    await client.filledPrompt("greeting");
+    await client.renderPrompt("greeting");
     await new Promise((resolve) => setTimeout(resolve, 30));
 
     const answers = await Promise.all([
-      client.filledPrompt("greeting"),
-      client.filledPrompt("greeting"),
-      client.filledPrompt("greeting"),
+      client.renderPrompt("greeting"),
+      client.renderPrompt("greeting"),
+      client.renderPrompt("greeting"),
     ]);
 
     expect(resolveCalls).toBe(2);
@@ -262,7 +263,7 @@ describe("filledPrompt", () => {
 
   it("reports a missing variable from the server render", async () => {
     const fetch = fakeFetch((url) =>
-      url.includes("/prompt")
+      url.includes("/render")
         ? new Response(
             JSON.stringify({
               error: {
@@ -276,22 +277,22 @@ describe("filledPrompt", () => {
         : snapshotResponse(snapshotDocument()),
     );
     const client = make(fetch);
-    await expect(client.filledPrompt("greeting", { variables: {} })).rejects.toBeInstanceOf(
+    await expect(client.renderPrompt("greeting", { variables: {} })).rejects.toBeInstanceOf(
       MissingVariableError,
     );
   });
 
   it("maps the 404 reasons onto the same errors as local resolution", async () => {
     const fetch = fakeFetch((url, init) => {
-      if (!url.includes("/prompt")) return snapshotResponse(snapshotDocument());
-      const body = JSON.parse(init?.body as string) as { prompt: string };
-      if (body.prompt === "fr") {
+      if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
+      const body = JSON.parse(init?.body as string) as { template: string };
+      if (body.template === "fr") {
         return new Response(
           JSON.stringify({
             error: {
               code: "not_found",
               message: "no prompt",
-              details: { reason: "unknown_prompt", key: "greeting", prompt: "fr", prompt_names: ["default"] },
+              details: { reason: "unknown_template", key: "greeting", template: "fr", template_names: ["default"] },
             },
           }),
           { status: 404 },
@@ -307,24 +308,24 @@ describe("filledPrompt", () => {
     const client = make(fetch);
 
     try {
-      await client.filledPrompt("draft");
+      await client.renderPrompt("draft");
       expect.unreachable("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(UnresolvedError);
-      expect((error as UnresolvedError).useCase).toBe("draft");
+      expect((error as UnresolvedError).promptKey).toBe("draft");
     }
     try {
-      await client.filledPrompt("greeting", { prompt: "fr" });
+      await client.renderPrompt("greeting", { template: "fr" });
       expect.unreachable("should have thrown");
     } catch (error) {
-      expect(error).toBeInstanceOf(UnknownPromptError);
-      expect((error as UnknownPromptError).useCase).toBe("greeting");
+      expect(error).toBeInstanceOf(UnknownTemplateError);
+      expect((error as UnknownTemplateError).template).toBe("fr");
     }
   });
 
   it("surfaces an unexpected status as an ApiError", async () => {
     const fetch = fakeFetch((url) =>
-      url.includes("/prompt")
+      url.includes("/render")
         ? new Response(
             JSON.stringify({ error: { code: "forbidden", message: "API key lacks the read scope" } }),
             { status: 403 },
@@ -333,7 +334,7 @@ describe("filledPrompt", () => {
     );
     const client = make(fetch);
     try {
-      await client.filledPrompt("greeting");
+      await client.renderPrompt("greeting");
       expect.unreachable("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(ApiError);

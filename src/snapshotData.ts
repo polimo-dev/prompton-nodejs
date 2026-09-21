@@ -1,11 +1,8 @@
 import type { Engine, Message } from "./template.js";
 
 /**
- * Decoding of the `GET /use-cases` body. Schema v4 only.
- *
- * This SDK reads exactly schema v4. Older, newer, missing, and legacy-version documents are
- * refused outright because a deployment revision must be interpreted as one model plus pinned
- * prompt versions, not as a router.
+ * Decoding of the `GET /prompts` body. Schema v6 adds prepared request metadata while schema v5
+ * remains readable for existing bundles and disk caches.
  */
 
 /** How much of a generation's raw text the app may send. */
@@ -17,7 +14,7 @@ export interface PayloadPolicy {
   encrypt: boolean;
 }
 
-/** One input variable a use case declares. */
+/** One input variable a prompt declares. */
 export interface InputVariable {
   name: string | null;
   type: string;
@@ -27,39 +24,48 @@ export interface InputVariable {
 }
 
 /** A deployment revision: one model, one pinned prompt version per prompt name. */
-export interface UseCaseDeployment {
+export interface PromptDeployment {
   id: string | null;
-  useCaseKey: string;
+  promptKey: string;
   revision: number | null;
   modelId: string | null;
+  api: "chat_completions" | "decisions" | (string & {}) | null;
+  requestPath: string | null;
   params: Record<string, unknown>;
   providerOptions: Record<string, unknown>;
-  promptPins: Record<string, string>;
+  templatePins: Record<string, string>;
 }
 
-/** A use case plus the deployment pinned for it in this environment. */
-export interface UseCaseDefinition {
+/** A prompt plus the deployment pinned for it in this environment. */
+export interface PromptDefinition {
   id: string | null;
   key: string;
-  kind: "chat" | "text" | "embedding" | (string & {});
+  kind: "chat" | "decision" | "text" | "embedding" | (string & {});
   inputSchema: InputVariable[];
   defaultParams: Record<string, unknown>;
   payloadPolicy: PayloadPolicy | null;
-  deployment: UseCaseDeployment | null;
+  deployment: PromptDeployment | null;
 }
 
 /** An immutable prompt version. */
-export interface UseCasePromptVersion {
+export interface PromptVersion {
   id: string;
-  promptId: string | null;
+  promptTemplateId: string | null;
   number: number | null;
+  kind: "chat" | "decision" | "text" | "embedding" | (string & {}) | null;
   engine: Engine;
   messages: Message[] | null;
   textTemplate: string | null;
+  decision: DecisionTemplate | null;
+}
+
+export interface DecisionTemplate {
+  state: unknown;
+  questions: Record<string, unknown>;
 }
 
 /** A catalog model. */
-export interface UseCaseModel {
+export interface PromptModel {
   id: string;
   provider: string | null;
   modelId: string | null;
@@ -72,15 +78,15 @@ export interface UseCaseModel {
   status: string | null;
 }
 
-/** A decoded use-case document. */
-export interface UseCaseDocument {
+/** A decoded prompt document. */
+export interface PromptDocument {
   schemaVersion: number;
   project: string | null;
   environment: string | null;
-  useCases: Record<string, UseCaseDefinition>;
-  deployments: Record<string, UseCaseDeployment>;
-  promptVersions: Record<string, UseCasePromptVersion>;
-  models: Record<string, UseCaseModel>;
+  prompts: Record<string, PromptDefinition>;
+  deployments: Record<string, PromptDeployment>;
+  promptVersions: Record<string, PromptVersion>;
+  models: Record<string, PromptModel>;
 }
 
 /** Something the decoder tolerated but wants recorded. */
@@ -89,82 +95,87 @@ export interface DecodeWarning {
   detail: unknown;
 }
 
-/** The result of decoding a use-case document. */
+/** The result of decoding a prompt document. */
 export interface DecodeResult {
-  data: UseCaseDocument;
+  data: PromptDocument;
   warnings: DecodeWarning[];
 }
 
-/** The use-case document schema version this SDK reads. */
-export const SCHEMA_VERSION = 4;
+/** The current prompt document schema version emitted by PromptOn. Schema v5 is still accepted. */
+export const SCHEMA_VERSION = 6;
 
-const KINDS = new Set(["chat", "text", "embedding"]);
+const SUPPORTED_SCHEMA_VERSIONS = new Set([5, 6]);
+const KINDS = new Set(["chat", "decision", "text", "embedding"]);
 const ENGINES = new Set(["liquid", "raw"]);
 const PAYLOAD_MODES = new Set(["full", "hash", "none"]);
 const VARIABLE_TYPES = new Set(["string", "number", "boolean", "list", "map"]);
 
-/** Decodes a use-case document JSON string. Throws on a body this SDK cannot read. */
-export function decodeUseCaseDocumentJson(json: string): DecodeResult {
+/** Decodes a prompt document JSON string. Throws on a body this SDK cannot read. */
+export function decodePromptDocumentJson(json: string): DecodeResult {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch (error) {
-    throw new Error(`use-case document is not valid JSON: ${(error as Error).message}`);
+    throw new Error(`prompt document is not valid JSON: ${(error as Error).message}`);
   }
-  return decodeUseCaseDocument(parsed);
+  return decodePromptDocument(parsed);
 }
 
-/** Decodes an already-parsed use-case document. Throws on a body this SDK cannot read. */
-export function decodeUseCaseDocument(input: unknown): DecodeResult {
-  if (!isRecord(input)) throw new Error("use-case document must be an object");
+/** Decodes an already-parsed prompt document. Throws on a body this SDK cannot read. */
+export function decodePromptDocument(input: unknown): DecodeResult {
+  if (!isRecord(input)) throw new Error("prompt document must be an object");
   const warnings: DecodeWarning[] = [];
 
   const rawVersion = input["schema_version"];
   if (typeof rawVersion === "number" && Number.isInteger(rawVersion)) {
-    if (rawVersion !== SCHEMA_VERSION) {
+    if (!SUPPORTED_SCHEMA_VERSIONS.has(rawVersion)) {
       throw new Error(
-        `unsupported use-case document schema_version ${String(rawVersion)}; this SDK reads version ${String(SCHEMA_VERSION)}`,
+        `unsupported prompt document schema_version ${String(rawVersion)}; this SDK reads versions 5 and ${String(SCHEMA_VERSION)}`,
       );
     }
   } else if (rawVersion !== undefined && rawVersion !== null) {
-    throw new Error(`use-case document schema_version must be integer ${String(SCHEMA_VERSION)}`);
+    throw new Error(`prompt document schema_version must be integer ${String(SCHEMA_VERSION)}`);
   } else {
-    throw new Error("use-case document schema_version is required");
+    throw new Error("prompt document schema_version is required");
   }
 
-  if (!isRecord(input["use_cases"])) throw new Error("use-case document use_cases is required");
+  if (!isRecord(input["prompts"])) throw new Error("prompt document prompts is required");
 
-  const deployments = decodeDeployments(input["deployments"], warnings);
-  const useCases = decodeUseCases(input["use_cases"], deployments, warnings);
+  const deployments = decodeDeployments(input["deployments"], rawVersion, warnings);
+  const prompts = decodePrompts(input["prompts"], deployments, warnings);
 
   return {
     data: {
       schemaVersion: rawVersion,
       project: asString(input["project"]),
       environment: asString(input["environment"]),
-      useCases,
+      prompts,
       deployments,
-      promptVersions: decodeById(input["prompt_versions"], decodePromptVersion, warnings),
+      promptVersions: decodeById(
+        input["prompt_versions"],
+        (entry, fallbackId) => decodePromptVersion(entry, fallbackId, rawVersion),
+        warnings,
+      ),
       models: decodeById(input["models"], decodeModel, warnings),
     },
     warnings,
   };
 }
 
-function decodeUseCases(
+function decodePrompts(
   raw: Record<string, unknown>,
-  deployments: Record<string, UseCaseDeployment>,
+  deployments: Record<string, PromptDeployment>,
   warnings: DecodeWarning[],
-): Record<string, UseCaseDefinition> {
-  const useCases: Record<string, UseCaseDefinition> = {};
+): Record<string, PromptDefinition> {
+  const prompts: Record<string, PromptDefinition> = {};
   for (const [key, value] of Object.entries(raw)) {
     if (!isRecord(value)) {
-      warnings.push({ kind: "invalid_use_case", detail: key });
+      warnings.push({ kind: "invalid_prompt_key", detail: key });
       continue;
     }
     const kind = asString(value["kind"]) ?? "chat";
     if (!KINDS.has(kind)) warnings.push({ kind: "unknown_kind", detail: kind });
-    useCases[key] = {
+    prompts[key] = {
       id: asString(value["id"]),
       key,
       kind,
@@ -174,7 +185,7 @@ function decodeUseCases(
       deployment: deployments[key] ?? null,
     };
   }
-  return useCases;
+  return prompts;
 }
 
 function decodeInputSchema(raw: unknown, warnings: DecodeWarning[]): InputVariable[] {
@@ -217,9 +228,10 @@ function decodePayloadPolicy(raw: unknown, warnings: DecodeWarning[]): PayloadPo
 
 function decodeDeployments(
   raw: unknown,
+  schemaVersion: number,
   warnings: DecodeWarning[],
-): Record<string, UseCaseDeployment> {
-  const deployments: Record<string, UseCaseDeployment> = {};
+): Record<string, PromptDeployment> {
+  const deployments: Record<string, PromptDeployment> = {};
   if (raw === null || raw === undefined) return deployments;
   if (!isRecord(raw)) {
     warnings.push({ kind: "invalid_deployments", detail: raw });
@@ -231,7 +243,7 @@ function decodeDeployments(
       continue;
     }
     const pins: Record<string, string> = {};
-    const rawPins = value["prompt_pins"];
+    const rawPins = value["template_pins"];
     if (isRecord(rawPins)) {
       for (const [name, versionId] of Object.entries(rawPins)) {
         const id = asString(versionId);
@@ -242,16 +254,18 @@ function decodeDeployments(
         pins[name] = id;
       }
     } else if (rawPins !== null && rawPins !== undefined) {
-      warnings.push({ kind: "invalid_prompt_pins", detail: key });
+      warnings.push({ kind: "invalid_template_pins", detail: key });
     }
     deployments[key] = {
       id: asString(value["id"]),
-      useCaseKey: asString(value["use_case_key"]) ?? key,
+      promptKey: asString(value["prompt_key"]) ?? key,
       revision: asInteger(value["revision"]),
       modelId: asString(value["model_id"]),
+      api: schemaVersion >= 6 ? asString(value["api"]) : null,
+      requestPath: schemaVersion >= 6 ? asString(value["request_path"]) : null,
       params: asRecord(value["params"]),
       providerOptions: asRecord(value["provider_options"]),
-      promptPins: pins,
+      templatePins: pins,
     };
   }
   return deployments;
@@ -293,15 +307,29 @@ function decodeById<T extends { id: string }>(
 function decodePromptVersion(
   raw: Record<string, unknown>,
   fallbackId: string,
-): UseCasePromptVersion {
+  schemaVersion: number,
+): PromptVersion {
   const engine = asString(raw["engine"]) ?? "liquid";
+  const kind = schemaVersion >= 6 ? asString(raw["kind"]) : null;
   return {
     id: asString(raw["id"]) ?? fallbackId,
-    promptId: asString(raw["prompt_id"]),
+    promptTemplateId: asString(raw["prompt_template_id"]),
     number: asInteger(raw["number"]),
+    kind,
     engine: (ENGINES.has(engine) ? engine : "liquid") as Engine,
     messages: decodeMessages(raw["messages"]),
     textTemplate: asString(raw["text_template"]),
+    decision: schemaVersion >= 6 ? decodeDecision(raw["decision"]) : null,
+  };
+}
+
+function decodeDecision(raw: unknown): DecisionTemplate | null {
+  if (!isRecord(raw)) return null;
+  const questions = raw["questions"];
+  if (!isRecord(questions)) return null;
+  return {
+    state: raw["state"] ?? null,
+    questions: { ...questions },
   };
 }
 
@@ -321,7 +349,7 @@ function decodeMessages(raw: unknown): Message[] | null {
   return messages;
 }
 
-function decodeModel(raw: Record<string, unknown>, fallbackId: string): UseCaseModel {
+function decodeModel(raw: Record<string, unknown>, fallbackId: string): PromptModel {
   const capabilities = Array.isArray(raw["capabilities"])
     ? raw["capabilities"].map((value) => asString(value)).filter((value): value is string => value !== null)
     : [];

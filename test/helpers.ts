@@ -6,16 +6,16 @@ import type { AddressInfo } from "node:net";
 
 import type { Logger } from "../src/index.js";
 
-/** A snapshot document in the shape `GET /use-cases` returns, small enough to read in a test. */
+/** A snapshot document in the shape `GET /prompts` returns, small enough to read in a test. */
 export function snapshotDocument(
   environment = "production",
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    schema_version: 4,
+    schema_version: 6,
     project: "sdkfixture",
     environment,
-    use_cases: {
+    prompts: {
       greeting: {
         id: "0198f2a1-0000-7000-8000-00000000c001",
         kind: "chat",
@@ -50,15 +50,24 @@ export function snapshotDocument(
         default_params: {},
         payload_policy: null,
       },
+      sentiment: {
+        id: "0198f2a1-0000-7000-8000-00000000c005",
+        kind: "decision",
+        input_schema: [{ name: "diary", type: "string", required: true }],
+        default_params: {},
+        payload_policy: null,
+      },
     },
     deployments: {
       greeting: {
         id: "0198f2a1-0000-7000-8000-00000000d001",
         revision: 3,
         model_id: "0198f2a1-0000-7000-8000-00000000e001",
+        api: "chat_completions",
+        request_path: "/api/v1/chat/completions",
         params: {},
         provider_options: {},
-        prompt_pins: {
+        template_pins: {
           default: "0198f2a1-0000-7000-8000-00000000a001",
           ko: "0198f2a1-0000-7000-8000-00000000a002",
         },
@@ -67,24 +76,39 @@ export function snapshotDocument(
         id: "0198f2a1-0000-7000-8000-00000000d002",
         revision: 1,
         model_id: "0198f2a1-0000-7000-8000-00000000e001",
+        api: "chat_completions",
+        request_path: "/api/v1/chat/completions",
         params: {},
         provider_options: {},
-        prompt_pins: { default: "0198f2a1-0000-7000-8000-00000000a003" },
+        template_pins: { default: "0198f2a1-0000-7000-8000-00000000a003" },
       },
       embed: {
         id: "0198f2a1-0000-7000-8000-00000000d003",
         revision: 2,
         model_id: "0198f2a1-0000-7000-8000-00000000e002",
+        api: null,
+        request_path: null,
         params: {},
         provider_options: {},
-        prompt_pins: {},
+        template_pins: {},
+      },
+      sentiment: {
+        id: "0198f2a1-0000-7000-8000-00000000d004",
+        revision: 5,
+        model_id: "0198f2a1-0000-7000-8000-00000000e003",
+        api: "decisions",
+        request_path: "/api/alpha/decisions",
+        params: {},
+        provider_options: {},
+        template_pins: { default: "0198f2a1-0000-7000-8000-00000000a004" },
       },
     },
     prompt_versions: {
       "0198f2a1-0000-7000-8000-00000000a001": {
         id: "0198f2a1-0000-7000-8000-00000000a001",
-        prompt_id: "0198f2a1-0000-7000-8000-00000000b001",
+        prompt_template_id: "0198f2a1-0000-7000-8000-00000000b001",
         number: 2,
+        kind: "chat",
         engine: "liquid",
         messages: [
           { role: "system", content: "You are a friendly greeter." },
@@ -94,8 +118,9 @@ export function snapshotDocument(
       },
       "0198f2a1-0000-7000-8000-00000000a002": {
         id: "0198f2a1-0000-7000-8000-00000000a002",
-        prompt_id: "0198f2a1-0000-7000-8000-00000000b002",
+        prompt_template_id: "0198f2a1-0000-7000-8000-00000000b002",
         number: 1,
+        kind: "chat",
         engine: "liquid",
         messages: [
           { role: "system", content: "너는 친절한 인사 도우미다." },
@@ -105,11 +130,39 @@ export function snapshotDocument(
       },
       "0198f2a1-0000-7000-8000-00000000a003": {
         id: "0198f2a1-0000-7000-8000-00000000a003",
-        prompt_id: "0198f2a1-0000-7000-8000-00000000b003",
+        prompt_template_id: "0198f2a1-0000-7000-8000-00000000b003",
         number: 4,
+        kind: "text",
         engine: "liquid",
         messages: null,
         text_template: "Summarize:\n{% for item in items %}- {{ item }}\n{% endfor %}",
+      },
+      "0198f2a1-0000-7000-8000-00000000a004": {
+        id: "0198f2a1-0000-7000-8000-00000000a004",
+        prompt_template_id: "0198f2a1-0000-7000-8000-00000000b004",
+        number: 1,
+        kind: "decision",
+        engine: "liquid",
+        messages: [],
+        text_template: null,
+        decision: {
+          state: { diary: "{{ diary }}", static_key: "literal" },
+          questions: {
+            mood: {
+              type: "choice",
+              instructions: "Classify {{ diary }}.",
+              criteria: {
+                positive: "The diary feels upbeat.",
+                negative: "The diary feels difficult.",
+              },
+            },
+            intensity: {
+              type: "score",
+              instructions: "Rate intensity.",
+              criteria: ["calm", "strong"],
+            },
+          },
+        },
       },
     },
     models: {
@@ -131,6 +184,16 @@ export function snapshotDocument(
         metadata: {},
         provider_options: {},
         capabilities: [],
+        status: "active",
+      },
+      "0198f2a1-0000-7000-8000-00000000e003": {
+        id: "0198f2a1-0000-7000-8000-00000000e003",
+        provider: "openrouter",
+        model_id: "typesafe/jev-1.13",
+        display_name: "Jev",
+        metadata: { output_modalities: ["decisions"] },
+        provider_options: {},
+        capabilities: ["decisions"],
         status: "active",
       },
     },

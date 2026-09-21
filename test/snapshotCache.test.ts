@@ -41,7 +41,7 @@ describe("the 10-second cache", () => {
     expect(fetch.calls.length).toBe(1);
 
     for (let i = 0; i < 50; i += 1) {
-      expect(client.useCase("greeting").model).toBe("openai/gpt-4o-mini");
+      expect(client.prompt("greeting").model).toBe("openai/gpt-4o-mini");
     }
     expect(fetch.calls.length).toBe(1);
   });
@@ -62,13 +62,13 @@ describe("the 10-second cache", () => {
     await sleep(40);
 
     // The resolve is synchronous and answers from the document already held.
-    expect(client.useCase("greeting").model).toBe("openai/gpt-4o-mini");
+    expect(client.prompt("greeting").model).toBe("openai/gpt-4o-mini");
     await sleep(20);
 
     expect(fetch.calls.length).toBe(2);
     const headers = fetch.calls[1]?.init?.headers as Record<string, string>;
     expect(headers["if-none-match"]).toBe('"sha256-one"');
-    expect(client.useCasesInfo().etag).toBe('"sha256-one"');
+    expect(client.promptsInfo().etag).toBe('"sha256-one"');
   });
 
   it("a 304 leaves the document in place and clears the stale flag", async () => {
@@ -79,32 +79,32 @@ describe("the 10-second cache", () => {
     );
     const client = make({ apiKey: "ptn_k_1", baseUrl: "http://ptn.test", fetch, poll: false });
     await client.ready();
-    const first = client.useCase("greeting");
+    const first = client.prompt("greeting");
 
     const result = await client.refresh();
     expect(result.status).toBe("not_modified");
-    const current = client.useCase("greeting");
+    const current = client.prompt("greeting");
     expect({
       key: current.key,
-      prompt: current.prompt,
+      prompt: current.template,
       model: current.model,
       deployment: current.deployment,
       source: current.source,
     }).toEqual({
       key: first.key,
-      prompt: first.prompt,
+      prompt: first.template,
       model: first.model,
       deployment: first.deployment,
       source: first.source,
     });
-    expect(client.useCasesInfo().stale).toBe(false);
+    expect(client.promptsInfo().stale).toBe(false);
   });
 });
 
 describe("rate limiting and backoff", () => {
   it("honours Retry-After on 429, keeps serving, and does not call again before it elapses", async () => {
     const stub = await startStubServer((request, response) => {
-      if (request.path.startsWith("/api/v1/use-cases")) {
+      if (request.path.startsWith("/api/v1/prompts")) {
         if (stub.requests.length === 1) {
           response.writeHead(200, { "content-type": "application/json", etag: '"e1"' });
           response.end(JSON.stringify(snapshotDocument()));
@@ -135,11 +135,11 @@ describe("rate limiting and backoff", () => {
 
     // The caller sees no error, and no further request is made before Retry-After elapses.
     for (let i = 0; i < 20; i += 1) {
-      expect(client.useCase("greeting").model).toBe("openai/gpt-4o-mini");
-      client.useCase("greeting");
+      expect(client.prompt("greeting").model).toBe("openai/gpt-4o-mini");
+      client.prompt("greeting");
     }
     await sleep(30);
-    client.useCase("greeting");
+    client.prompt("greeting");
     await sleep(10);
     expect(stub.requests.length).toBe(2);
   });
@@ -168,8 +168,8 @@ describe("rate limiting and backoff", () => {
     const third = await client.refresh();
     expect(third).toMatchObject({ status: "failed", retryInMs: 4000 });
 
-    expect(client.useCase("greeting").model).toBe("openai/gpt-4o-mini");
-    expect(client.useCasesInfo().stale).toBe(true);
+    expect(client.prompt("greeting").model).toBe("openai/gpt-4o-mini");
+    expect(client.promptsInfo().stale).toBe(true);
   });
 
   it("caps the backoff at five minutes", async () => {
@@ -206,8 +206,8 @@ describe("the server being down", () => {
 
     const result = await client.refresh();
     expect(result.status).toBe("failed");
-    expect(client.useCase("greeting").model).toBe("openai/gpt-4o-mini");
-    expect(client.useCasesInfo().stale).toBe(true);
+    expect(client.prompt("greeting").model).toBe("openai/gpt-4o-mini");
+    expect(client.promptsInfo().stale).toBe(true);
   });
 
   it("fails resolution with a clear error when no tier holds a document", async () => {
@@ -216,8 +216,8 @@ describe("the server being down", () => {
     });
     const client = make({ apiKey: "ptn_k_1", baseUrl: "http://ptn.test", fetch, poll: false });
     await client.ready();
-    expect(() => client.useCase("greeting")).toThrowError(/unreachable and nothing is cached/u);
-    expect(client.useCasesInfo().source).toBe("none");
+    expect(() => client.prompt("greeting")).toThrowError(/unreachable and nothing is cached/u);
+    expect(client.promptsInfo().source).toBe("none");
   });
 });
 
@@ -243,14 +243,14 @@ describe("the three tiers", () => {
     expect(sidecar["project"]).toBe("sdkfixture");
 
     const offline = make({ mode: "offline", diskCache: path, project: "sdkfixture" });
-    expect(offline.useCase("greeting").source).toBe("disk");
-    expect(offline.useCasesInfo().etag).toBe('"sha256-disk"');
+    expect(offline.prompt("greeting").source).toBe("disk");
+    expect(offline.promptsInfo().etag).toBe('"sha256-disk"');
   });
 
   it("falls back to the bundle when the disk cache is empty", () => {
     const dir = tempDir();
     cleanups.push(dir.cleanup);
-    const bundle = join(dir.path, "use-cases.production.json");
+    const bundle = join(dir.path, "prompts.production.json");
     writeFileSync(bundle, JSON.stringify(snapshotDocument()));
 
     const client = make({
@@ -258,7 +258,7 @@ describe("the three tiers", () => {
       diskCache: join(dir.path, "missing.json"),
       bundlePath: bundle,
     });
-    const resolution = client.useCase("greeting");
+    const resolution = client.prompt("greeting");
     expect(resolution.source).toBe("bundle");
     expect(resolution.model).toBe("openai/gpt-4o-mini");
   });
@@ -278,7 +278,7 @@ describe("the three tiers", () => {
       logger,
     });
     clients.push(client);
-    expect(() => client.useCase("greeting")).toThrowError(/nothing is cached/u);
+    expect(() => client.prompt("greeting")).toThrowError(/nothing is cached/u);
     expect(logger.lines.join("\n")).toMatch(/refusing the bundle snapshot/u);
   });
 
@@ -297,7 +297,7 @@ describe("the three tiers", () => {
       logger,
     });
     clients.push(client);
-    expect(() => client.useCase("greeting")).toThrowError(/nothing is cached/u);
+    expect(() => client.prompt("greeting")).toThrowError(/nothing is cached/u);
     expect(logger.lines.join("\n")).toMatch(/refusing the bundle snapshot/u);
   });
 
@@ -305,12 +305,12 @@ describe("the three tiers", () => {
     const dir = tempDir();
     cleanups.push(dir.cleanup);
     const path = join(dir.path, "snap.json");
-    writeFileSync(path, '{"schema_version": 4, "use_cas');
+    writeFileSync(path, '{"schema_version": 5, "use_cas');
 
     const logger = recordingLogger();
     const client = new PromptOn({ mode: "offline", diskCache: path, logger });
     clients.push(client);
-    expect(client.useCasesInfo().source).toBe("none");
+    expect(client.promptsInfo().source).toBe("none");
     expect(logger.lines.join("\n")).toMatch(/ignoring the disk snapshot/u);
   });
 
@@ -325,7 +325,7 @@ describe("the three tiers", () => {
     await client.ready();
 
     const out = join(dir.path, "bundle.json");
-    client.exportUseCases(out);
+    client.exportPrompts(out);
     expect(readFileSync(out, "utf8")).toBe(raw);
   });
 
@@ -338,7 +338,7 @@ describe("the three tiers", () => {
     const logger = recordingLogger();
     const client = new PromptOn({ apiKey: null, diskCache: false, bundlePath: bundle, logger });
     clients.push(client);
-    expect(client.useCase("greeting").source).toBe("bundle");
+    expect(client.prompt("greeting").source).toBe("bundle");
     expect(logger.lines.filter((line) => line.includes("no API key")).length).toBe(1);
   });
 });
