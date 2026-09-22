@@ -97,7 +97,7 @@ export function snapshotDocument(
         revision: 5,
         model_id: "0198f2a1-0000-7000-8000-00000000e003",
         api: "decisions",
-        request_path: "/api/alpha/decisions",
+        request_path: "/api/v1/systemone",
         params: {},
         provider_options: {},
         template_pins: { default: "0198f2a1-0000-7000-8000-00000000a004" },

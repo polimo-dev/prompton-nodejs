@@ -208,12 +208,14 @@ const request = prompt.request({ transcriptions, mode: "fresh", language: "en" }
 ```
 
 For Decision prompts, the body is `{ model, state, questions }` plus optional `provider`,
-`session_id`, `trace`, and `user`. Chat and Decision protected fields such as `model`, `messages`,
-`state`, `questions`, `provider`, and `usage` cannot be overridden through params.
+`session_id`, `trace`, and `user`; OpenRouter Decision deployments use `/api/v1/systemone`.
+Chat and Decision protected fields such as `model`, `messages`, `state`, `questions`, `provider`,
+and `usage` cannot be overridden through params.
 
 Prepared requests require schema v6 metadata and the immutable pinned version kind. Legacy schema v5
 documents remain readable with the existing messages/text APIs. Unsupported or mismatched provider
-paths fail explicitly. Request options support `template`, `params`, `providerOptions`, and Decision
+paths fail explicitly; cached OpenRouter Decision deployments using `/api/alpha/decisions` are still
+accepted for compatibility. Request options support `template`, `params`, `providerOptions`, and Decision
 `session_id`, `trace`, `user` metadata. Chat omits null params; provider options preserve explicit null.
 Decision metadata values must be typed: session/user strings up to 256 characters, and trace objects.
 

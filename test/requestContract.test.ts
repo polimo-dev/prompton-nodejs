@@ -43,7 +43,13 @@ it("rejects protected params and null Decision metadata rather than silently dro
   expect(() => client.prompt("greeting").request({ name: "Ada" }, { session_id: "session" })).toThrow(PreparedRequestError);
 });
 
-it.each(["/api/v1/chat/completions", "/\\attacker.example", "https://attacker.example"])(
+it("accepts the legacy OpenRouter Decisions path for cached prompt documents", () => {
+  const doc = snapshotDocument();
+  (doc["deployments"] as any)["sentiment"]["request_path"] = "/api/alpha/decisions";
+  expect(loaded(doc).prompt("sentiment").request({ diary: "hi" }).path).toBe("/api/alpha/decisions");
+});
+
+it.each(["/api/v1/chat/completions", "/api/systemone", "/v1/systemone", "/\\attacker.example", "https://attacker.example"])(
   "refuses a Decision deployment with mismatched path %s", (path) => {
     const doc = snapshotDocument();
     (doc["deployments"] as any)["sentiment"]["request_path"] = path;
@@ -83,7 +89,7 @@ it("legacy v5 ignores injected request metadata and v6 requires the immutable ve
 
 it("remote Decision rendering and its cache retain native content and the prepared POST request", async () => {
   const decision = { state: "hello", questions: { accept: { type: "noul", instructions: "Accept?" } } };
-  const request = { api: "decisions", method: "post", path: "/api/alpha/decisions", body: { model: "typesafe/jev-1.13", ...decision } };
+  const request = { api: "decisions", method: "post", path: "/api/v1/systemone", body: { model: "typesafe/jev-1.13", ...decision } };
   const fetch = fakeFetch((url) => url.includes("/render")
     ? new Response(JSON.stringify({ key: "sentiment", kind: "decision", decision, request, api: request.api, request_path: request.path }), { status: 200 })
     : snapshotResponse(snapshotDocument()));

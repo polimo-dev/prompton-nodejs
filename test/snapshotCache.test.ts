@@ -245,6 +245,28 @@ describe("the three tiers", () => {
     const offline = make({ mode: "offline", diskCache: path, project: "sdkfixture" });
     expect(offline.prompt("greeting").source).toBe("disk");
     expect(offline.promptsInfo().etag).toBe('"sha256-disk"');
+    expect(offline.prompt("sentiment").request({ diary: "offline" }).path).toBe("/api/v1/systemone");
+  });
+
+  it("keeps preparing legacy cached Decision requests from disk", async () => {
+    const dir = tempDir();
+    cleanups.push(dir.cleanup);
+    const path = join(dir.path, "snap.json");
+    const legacy = snapshotDocument();
+    (legacy["deployments"] as any)["sentiment"]["request_path"] = "/api/alpha/decisions";
+
+    const fetch = fakeFetch(() => snapshotResponse(legacy, '"sha256-legacy"'));
+    const first = make({
+      apiKey: "ptn_sdkfixture_k",
+      baseUrl: "http://ptn.test",
+      fetch,
+      diskCache: path,
+      poll: false,
+    });
+    await first.ready();
+
+    const offline = make({ mode: "offline", diskCache: path, project: "sdkfixture" });
+    expect(offline.prompt("sentiment").request({ diary: "offline" }).path).toBe("/api/alpha/decisions");
   });
 
   it("falls back to the bundle when the disk cache is empty", () => {
@@ -261,6 +283,7 @@ describe("the three tiers", () => {
     const resolution = client.prompt("greeting");
     expect(resolution.source).toBe("bundle");
     expect(resolution.model).toBe("openai/gpt-4o-mini");
+    expect(client.prompt("sentiment").request({ diary: "bundle" }).path).toBe("/api/v1/systemone");
   });
 
   it("refuses a document from another environment", () => {

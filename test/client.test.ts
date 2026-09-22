@@ -161,7 +161,7 @@ describe("resolution", () => {
     expect(request).toEqual({
       api: "decisions",
       method: "POST",
-      path: "/api/alpha/decisions",
+      path: "/api/v1/systemone",
       body: {
         model: "typesafe/jev-1.13",
         state: { diary: "Today was bright", static_key: "literal" },

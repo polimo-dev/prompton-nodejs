@@ -4,6 +4,13 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.3.1
+
+### Changed
+
+- OpenRouter Decision prepared requests now use `/api/v1/systemone`, while cached prompt documents
+  that still pin `/api/alpha/decisions` remain accepted for compatibility.
+
 ## 0.3.0
 
 ### Added

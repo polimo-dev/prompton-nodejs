@@ -913,26 +913,28 @@ function expectRequestPath(resolution: Resolution): string {
       `prompt ${resolution.promptKey} has invalid request_path ${path}; expected an origin-relative path`,
     );
   }
-  const expected = expectedRequestPath(resolution.provider, resolution.api);
-  if (expected === null) {
+  const expected = expectedRequestPaths(resolution.provider, resolution.api);
+  if (expected.length === 0) {
     throw new PreparedRequestError(
       `prompt ${resolution.promptKey} cannot prepare a provider request for provider ${String(resolution.provider)} and api ${String(resolution.api)}`,
     );
   }
-  if (path !== expected) {
+  if (!expected.includes(path)) {
     throw new PreparedRequestError(
-      `prompt ${resolution.promptKey} has request_path ${path}, expected ${expected} for provider ${String(resolution.provider)} and api ${String(resolution.api)}`,
+      `prompt ${resolution.promptKey} has request_path ${path}, expected ${expected.join(" or ")} for provider ${String(resolution.provider)} and api ${String(resolution.api)}`,
     );
   }
   return path;
 }
 
-function expectedRequestPath(provider: string | null, api: string | null): string | null {
-  if (provider === "openrouter" && api === "chat_completions") return "/api/v1/chat/completions";
-  if (provider === "openrouter" && api === "decisions") return "/api/alpha/decisions";
-  if (provider === "openai" && api === "chat_completions") return "/v1/chat/completions";
-  if (provider === "groq" && api === "chat_completions") return "/openai/v1/chat/completions";
-  return null;
+function expectedRequestPaths(provider: string | null, api: string | null): string[] {
+  if (provider === "openrouter" && api === "chat_completions") return ["/api/v1/chat/completions"];
+  if (provider === "openrouter" && api === "decisions") {
+    return ["/api/v1/systemone", "/api/alpha/decisions"];
+  }
+  if (provider === "openai" && api === "chat_completions") return ["/v1/chat/completions"];
+  if (provider === "groq" && api === "chat_completions") return ["/openai/v1/chat/completions"];
+  return [];
 }
 
 function rejectProviderOptionsForNonOpenRouter(
