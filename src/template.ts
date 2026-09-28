@@ -35,8 +35,10 @@ const LITERAL_WORDS = new Set(["true", "false", "nil", "null", "empty", "blank"]
 
 /** A chat message, as a prompt version stores it and as a provider expects it. */
 export interface Message {
-  role: string;
-  content: string;
+  role?: string;
+  content?: unknown;
+  type?: string;
+  name?: string | null;
   [key: string]: unknown;
 }
 
@@ -65,16 +67,40 @@ export function render(source: string, variables: Variables, engine: Engine = "l
   return renderNodesToString(parse(source), variables);
 }
 
-/** Renders the `content` of every message, leaving `role` and any other key untouched. */
+/**
+ * Renders chat messages. A `{type: "slot", name: "history"}` message splices a variable list of
+ * full provider-native chat messages verbatim. Static messages render string `content` only and
+ * preserve null, array content, tool_calls, tool_call_id and unknown provider fields.
+ */
 export function renderMessages(
   messages: readonly Message[],
   variables: Variables,
   engine: Engine = "liquid",
 ): Message[] {
-  return messages.map((message) => ({
-    ...message,
-    content: render(message.content ?? "", variables, engine),
-  }));
+  const vars = variables ?? {};
+  const out: Message[] = [];
+  for (const message of messages) {
+    if (message.type === "slot") {
+      const name = typeof message.name === "string" ? message.name : "";
+      if (!Object.hasOwn(vars, name)) throw new MissingVariableError(name);
+      const value = vars[name];
+      if (!Array.isArray(value)) throw new TemplateRenderError(`message slot ${name} must be a list`);
+      for (const entry of value) {
+        if (!isRecord(entry)) throw new TemplateRenderError(`message slot ${name} must contain objects`);
+        out.push({ ...entry });
+      }
+    } else {
+      out.push({
+        ...message,
+        content: typeof message.content === "string" ? render(message.content, vars, engine) : message.content,
+      });
+    }
+  }
+  return out;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

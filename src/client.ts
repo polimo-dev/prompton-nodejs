@@ -7,6 +7,7 @@ import {
   UnknownTemplateError,
   UnresolvedError,
   ApiError,
+  InvalidRecordError,
 } from "./errors.js";
 import { resolveConfig, type PromptOnOptions, type ResolvedConfig } from "./config.js";
 import { errorMessage, parseJson, request, retryAfterMs, TransportError } from "./http.js";
@@ -32,14 +33,14 @@ import {
   resolvePromptFromSnapshot,
   type Resolution,
 } from "./resolver.js";
-import { decodePromptDocument, type PayloadPolicy } from "./snapshotData.js";
+import { decodePromptDocument, type PayloadPolicy, type ToolDefinitions } from "./snapshotData.js";
 import { SnapshotManager, type RefreshResult } from "./snapshot.js";
 import { SnapshotStore, writePromptDocumentFile, type PromptsInfo } from "./store.js";
 import { render as renderTemplate, renderMessages, type Message } from "./template.js";
 import type { DecisionTemplate } from "./snapshotData.js";
 import { canonicalJson, textOf } from "./json.js";
 import { throttled, type Logger } from "./logger.js";
-import { VERSION } from "./version.js";
+import { SDK_NAME, VERSION } from "./version.js";
 
 /** Options for {@link PromptOn.prompt}. */
 export interface PromptOptions {
@@ -107,6 +108,16 @@ export interface LogOptions {
   policy?: PayloadPolicy | null;
 }
 
+/** One application-observed trace event for eval evidence and tool-call monitoring. */
+export type TraceEvent = Record<string, unknown>;
+
+/** The server response for a trace-event submission. */
+export interface TraceEventResult {
+  accepted: number;
+  duplicates: number;
+  rejected: RejectedRecord[];
+}
+
 export class Prompt {
   private currentResolution: Resolution;
 
@@ -149,6 +160,10 @@ export class Prompt {
 
   get providerOptions(): Record<string, unknown> {
     return this.currentResolution.providerOptions;
+  }
+
+  get tools(): ToolDefinitions | null {
+    return this.currentResolution.tools;
   }
 
   get api(): string | null {
@@ -296,6 +311,7 @@ export class PromptOn {
   private readonly buffer: LogBuffer;
   private readonly resolveCache = new Map<string, ResolveState>();
   private readonly captured: LogRecord[] = [];
+  private readonly capturedEvents: TraceEvent[] = [];
   private readonly quiet: Logger;
   private readyPromise: Promise<RefreshResult> | null = null;
   private exitHandler: (() => void) | null = null;
@@ -665,9 +681,41 @@ export class PromptOn {
     return this.captured;
   }
 
-  /** Forgets the captured test-mode records. */
+  /** In test mode, every trace event that would have been sent, in order. */
+  get events(): readonly TraceEvent[] {
+    return this.capturedEvents;
+  }
+
+  /** Forgets the captured test-mode records and trace events. */
   clearLogs(): void {
     this.captured.length = 0;
+    this.capturedEvents.length = 0;
+  }
+
+  /**
+   * Submits application-observed trace events immediately.
+   *
+   * The SDK never infers tool execution from model requests; callers pass the tool/completion
+   * events they observed in their own app. In test mode the events are captured without HTTP.
+   */
+  async logEvents(events: readonly TraceEvent[]): Promise<TraceEventResult> {
+    const prepared = prepareTraceEvents(events);
+    if (this.config.mode === "test") {
+      this.capturedEvents.push(...prepared);
+      return { accepted: prepared.length, duplicates: 0, rejected: [] };
+    }
+    if (this.config.mode !== "live" || this.config.apiKey === null) {
+      return { accepted: 0, duplicates: 0, rejected: [] };
+    }
+    const response = await request(this.config, {
+      method: "POST",
+      path: "/logs",
+      query: { environment: this.config.environment },
+      body: JSON.stringify({ logs: [], events: prepared }),
+      timeoutMs: this.config.requestTimeoutMs,
+    });
+    if (response.status >= 200 && response.status < 300) return parseTraceEventResult(response.text);
+    throw new ApiError(response.status, errorMessage(response), parseJson(response.text), retryAfterMs(response));
   }
 
   // -------------------------------------------------------------------------
@@ -811,6 +859,31 @@ export class PromptOn {
   }
 }
 
+function prepareTraceEvents(events: readonly TraceEvent[]): TraceEvent[] {
+  if (!Array.isArray(events)) throw new InvalidRecordError("trace events must be an array");
+  if (events.length > 500) throw new InvalidRecordError("trace event batches are limited to 500 events");
+  const prepared: TraceEvent[] = [];
+  for (const event of events) {
+    if (!isPlainRecord(event)) throw new InvalidRecordError("trace events must be objects");
+    prepared.push({ ...event, sdk: { name: SDK_NAME, version: VERSION, ...asRecord(event["sdk"]) } });
+  }
+  return prepared;
+}
+
+function parseTraceEventResult(text: string): TraceEventResult {
+  const body = parseJson(text);
+  const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
+  return {
+    accepted: typeof record["accepted"] === "number" ? record["accepted"] : 0,
+    duplicates: typeof record["duplicates"] === "number" ? record["duplicates"] : 0,
+    rejected: Array.isArray(record["rejected"]) ? record["rejected"] as RejectedRecord[] : [],
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 function prepareProviderRequest(
   resolution: Resolution,
   variables: Record<string, unknown>,
@@ -827,7 +900,8 @@ function prepareProviderRequest(
       throw new NoTemplateError(resolution.promptKey);
     }
     const messages = renderMessages(resolution.messages, variables, resolution.engine ?? "liquid");
-    const params = requestParams(resolution.params, options.params, "chat");
+    const toolFields = providerToolFields(resolution.tools);
+    const params = requestParams(resolution.params, options.params, "chat", toolFields);
     const provider = providerOptions({
       ...resolution.providerOptions,
       ...(options.providerOptions ?? {}),
@@ -837,6 +911,7 @@ function prepareProviderRequest(
       model: expectModel(resolution),
       messages,
       ...params,
+      ...toolFields,
     };
     if (resolution.provider === "openrouter") body["usage"] = { include: true };
     if (Object.keys(provider).length > 0) body["provider"] = provider;
@@ -960,14 +1035,57 @@ function requestParams(
   base: Record<string, unknown>,
   override: Record<string, unknown> | null | undefined,
   api: string,
+  canonical: Record<string, unknown> = {},
 ): Record<string, unknown> {
   const merged = { ...base, ...(override ?? {}) };
   for (const key of Object.keys(merged)) {
-    if (PROTECTED_REQUEST_FIELDS.has(key)) {
+    if (PROTECTED_REQUEST_FIELDS.has(key) && !(key in canonical && sameJson(merged[key], canonical[key]))) {
       throw new PreparedRequestError(`${api} request params cannot override protected field ${key}`);
     }
   }
-  return cleanRecord(merged);
+  const cleaned = cleanRecord(merged);
+  for (const key of Object.keys(canonical)) delete cleaned[key];
+  return cleaned;
+}
+
+function providerToolFields(tools: unknown): Record<string, unknown> {
+  if (tools === null || tools === undefined) return {};
+  if (!isPlainRecord(tools)) throw new PreparedRequestError("canonical tools must be an object");
+  const unknown = Object.keys(tools).filter((key) => !["definitions", "tool_choice", "parallel_tool_calls"].includes(key));
+  if (unknown.length > 0) throw new PreparedRequestError(`canonical tools contain unsupported field(s): ${unknown.sort().join(", ")}`);
+  const definitions = tools["definitions"];
+  if (!Array.isArray(definitions)) throw new PreparedRequestError("canonical tools definitions must be a list");
+  const stripped = definitions.map(stripToolMetadata);
+  const out: Record<string, unknown> = { tools: stripped };
+  if (tools["tool_choice"] !== undefined) out["tool_choice"] = tools["tool_choice"];
+  if (tools["parallel_tool_calls"] !== undefined) {
+    if (typeof tools["parallel_tool_calls"] !== "boolean") {
+      throw new PreparedRequestError("canonical tools parallel_tool_calls must be a boolean");
+    }
+    out["parallel_tool_calls"] = tools["parallel_tool_calls"];
+  }
+  return out;
+}
+
+function stripToolMetadata(tool: unknown): Record<string, unknown> {
+  if (!isPlainRecord(tool)) throw new PreparedRequestError("canonical tool definitions must be objects");
+  if (tool["type"] !== "function") throw new PreparedRequestError("canonical tool definitions must be function tools");
+  const fn = tool["function"];
+  if (!isPlainRecord(fn)) throw new PreparedRequestError("canonical function tools require a function object");
+  if (typeof fn["name"] !== "string" || fn["name"].length === 0) {
+    throw new PreparedRequestError("canonical function tools require function.name");
+  }
+  if (!isPlainRecord(fn["parameters"])) {
+    throw new PreparedRequestError("canonical function tools require function.parameters");
+  }
+  const cleanFunction = { ...fn };
+  delete cleanFunction["output_schema"];
+  delete cleanFunction["output_examples"];
+  return { ...tool, function: cleanFunction };
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return canonicalJson(left) === canonicalJson(right);
 }
 
 const DECISION_PARAM_FIELDS = new Set(["session_id", "trace", "user"]);

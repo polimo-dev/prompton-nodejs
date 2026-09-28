@@ -18,6 +18,8 @@
 export { PromptOn, Prompt } from "./client.js";
 export type {
   LogOptions,
+  TraceEvent,
+  TraceEventResult,
   PreparedRequest,
   PreparedRequestOptions,
   RenderedPrompt,

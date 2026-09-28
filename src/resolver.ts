@@ -1,5 +1,5 @@
 import { UnknownPromptError, UnknownTemplateError, UnresolvedError } from "./errors.js";
-import type { DecisionTemplate, PayloadPolicy, PromptDocument } from "./snapshotData.js";
+import type { DecisionTemplate, PayloadPolicy, PromptDocument, ToolDefinitions } from "./snapshotData.js";
 import type { Engine, Message } from "./template.js";
 
 /**
@@ -61,6 +61,8 @@ export interface Resolution {
   textTemplate: string | null;
   /** The raw Decisions state/questions template, before rendering; `null` unless the kind is `decision`. */
   decision: DecisionTemplate | null;
+  /** Canonical provider-native tool definitions attached to this prompt version. */
+  tools: ToolDefinitions | null;
   /** The payload policy the monitoring-log buffer applies to this prompt's records. */
   payloadPolicy: PayloadPolicy | null;
   /** Whether the snapshot came from the network, the disk cache or a bundled file. */
@@ -142,6 +144,7 @@ export function resolvePromptFromSnapshot(
     messages: runtimeKind === "chat" ? (version?.messages ?? null) : null,
     textTemplate: runtimeKind === "text" ? (version?.textTemplate ?? null) : null,
     decision: runtimeKind === "decision" ? (version?.decision ?? null) : null,
+    tools: runtimeKind === "chat" ? (version?.tools ?? null) : null,
     payloadPolicy: prompt.payloadPolicy,
     source: options.source ?? "remote",
     etag: options.etag ?? null,

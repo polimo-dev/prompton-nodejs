@@ -1,8 +1,8 @@
 import type { Engine, Message } from "./template.js";
 
 /**
- * Decoding of the `GET /prompts` body. Schema v6 adds prepared request metadata while schema v5
- * remains readable for existing bundles and disk caches.
+ * Decoding of the `GET /prompts` body. Schema v7 adds canonical tool definitions and native message slots while schema v5/v6
+ * remain readable for existing bundles and disk caches.
  */
 
 /** How much of a generation's raw text the app may send. */
@@ -57,6 +57,13 @@ export interface PromptVersion {
   messages: Message[] | null;
   textTemplate: string | null;
   decision: DecisionTemplate | null;
+  tools: ToolDefinitions | null;
+}
+
+export interface ToolDefinitions {
+  definitions: Record<string, unknown>[];
+  tool_choice?: unknown;
+  parallel_tool_calls?: boolean;
 }
 
 export interface DecisionTemplate {
@@ -102,9 +109,9 @@ export interface DecodeResult {
 }
 
 /** The current prompt document schema version emitted by PromptOn. Schema v5 is still accepted. */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
-const SUPPORTED_SCHEMA_VERSIONS = new Set([5, 6]);
+const SUPPORTED_SCHEMA_VERSIONS = new Set([5, 6, 7]);
 const KINDS = new Set(["chat", "decision", "text", "embedding"]);
 const ENGINES = new Set(["liquid", "raw"]);
 const PAYLOAD_MODES = new Set(["full", "hash", "none"]);
@@ -130,7 +137,7 @@ export function decodePromptDocument(input: unknown): DecodeResult {
   if (typeof rawVersion === "number" && Number.isInteger(rawVersion)) {
     if (!SUPPORTED_SCHEMA_VERSIONS.has(rawVersion)) {
       throw new Error(
-        `unsupported prompt document schema_version ${String(rawVersion)}; this SDK reads versions 5 and ${String(SCHEMA_VERSION)}`,
+        `unsupported prompt document schema_version ${String(rawVersion)}; this SDK reads versions 5, 6 and ${String(SCHEMA_VERSION)}`,
       );
     }
   } else if (rawVersion !== undefined && rawVersion !== null) {
@@ -320,6 +327,7 @@ function decodePromptVersion(
     messages: decodeMessages(raw["messages"]),
     textTemplate: asString(raw["text_template"]),
     decision: schemaVersion >= 6 ? decodeDecision(raw["decision"]) : null,
+    tools: decodeTools(raw["tools"]),
   };
 }
 
@@ -338,15 +346,21 @@ function decodeMessages(raw: unknown): Message[] | null {
   const messages: Message[] = [];
   for (const entry of raw) {
     if (!isRecord(entry)) continue;
-    const message: Message = {
-      role: asString(entry["role"]) ?? "",
-      content: asString(entry["content"]) ?? "",
-    };
-    const name = asString(entry["name"]);
-    if (name !== null) message["name"] = name;
-    messages.push(message);
+    messages.push({ ...entry });
   }
   return messages;
+}
+
+function decodeTools(raw: unknown): ToolDefinitions | null {
+  if (!isRecord(raw)) return null;
+  const definitions = raw["definitions"];
+  if (!Array.isArray(definitions)) return null;
+  const out: ToolDefinitions = {
+    definitions: definitions.filter(isRecord).map((entry) => ({ ...entry })),
+  };
+  if (raw["tool_choice"] !== undefined) out.tool_choice = raw["tool_choice"];
+  if (typeof raw["parallel_tool_calls"] === "boolean") out.parallel_tool_calls = raw["parallel_tool_calls"];
+  return out;
 }
 
 function decodeModel(raw: Record<string, unknown>, fallbackId: string): PromptModel {

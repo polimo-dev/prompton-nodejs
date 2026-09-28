@@ -337,6 +337,24 @@ await prompton.close();    // stop the timers and flush what is queued
 There is no global singleton: create an instance, hold it, and pass it around. Timers are `unref`'d,
 so an instance never keeps a process alive.
 
+## Trace events
+
+Use `logEvents()` when your app has already observed tool calls or completion events and wants them available for eval evidence. The SDK does not execute tools and does not infer these events from provider requests. In live mode it immediately posts `{logs: [], events: [...]}` to the logs endpoint; in test mode the submitted events are available on `prompton.events`.
+
+```ts
+await prompton.logEvents([{
+  event_id: "evt_1",
+  trace_id: "trace_1",
+  event_kind: "tool_attempt",
+  status: "ok",
+  observed_at: new Date().toISOString(),
+  tool_call_id: "call_1",
+  tool_name: "search_diary",
+  arguments: { query: "Ada" },
+  result: { matches: [] },
+}]);
+```
+
 ## Development
 
 ```sh

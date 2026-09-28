@@ -576,3 +576,45 @@ describe("offline mode", () => {
     expect(fetch.calls.length).toBe(0);
   });
 });
+
+
+describe("trace events", () => {
+  const event = {
+    event_id: "evt-1",
+    trace_id: "trace-1",
+    event_kind: "tool_attempt",
+    status: "ok",
+    observed_at: "2026-09-28T00:00:00.000Z",
+    tool_call_id: "call-1",
+    tool_name: "search",
+    arguments: { q: "Ada" },
+    result: { matches: [] },
+  };
+
+  it("captures trace events in test mode", async () => {
+    const client = make({ mode: "test" });
+
+    await expect(client.logEvents([event])).resolves.toEqual({ accepted: 1, duplicates: 0, rejected: [] });
+
+    expect(client.events).toEqual([{ ...event, sdk: { name: "prompton-nodejs", version: VERSION } }]);
+    client.clearLogs();
+    expect(client.events).toEqual([]);
+  });
+
+  it("posts trace events to the logs endpoint with an empty logs list", async () => {
+    const fetch = fakeFetch((url, init) => {
+      if (!url.includes("/logs")) return snapshotResponse(snapshotDocument());
+      expect(url).toBe("http://ptn.test/api/v1/logs?environment=staging");
+      expect(JSON.parse(init?.body as string)).toEqual({
+        logs: [],
+        events: [{ ...event, sdk: { name: "prompton-nodejs", version: VERSION } }],
+      });
+      return new Response(JSON.stringify({ accepted: 1, duplicates: 0, rejected: [] }), { status: 202 });
+    });
+    const client = make({ mode: "live", apiKey: "ptn_sdkfixture_key", environment: "staging", baseUrl: "http://ptn.test", fetch });
+
+    await expect(client.logEvents([event])).resolves.toEqual({ accepted: 1, duplicates: 0, rejected: [] });
+
+    expect(fetch.calls.filter((call) => call.url.includes("/logs"))).toHaveLength(1);
+  });
+});

@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 0.4.0
+
+### Added
+
+- Prompt document schema v7 support for chat tool definitions and message slots. Chat prompts can now carry native OpenAI-compatible function tools, `tool_choice` and `parallel_tool_calls`; prepared requests strip PromptOn-only `output_schema` / `output_examples` metadata before returning the provider body.
+- Message-slot rendering for full provider chat histories, preserving native fields such as `content: null`, array content, `tool_calls`, `tool_call_id` and reasoning fields.
+- `PromptOn.logEvents()` submits application-observed trace events to `POST /api/v1/logs?environment=...` with `{logs: [], events: [...]}` for tool-call and completion eval evidence.
+
 ## 0.3.1
 
 ### Changed

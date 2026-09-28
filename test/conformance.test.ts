@@ -23,7 +23,6 @@ import {
   UnresolvedError,
   canonicalJson,
   type Engine,
-  type Message,
   type PromptDocument,
 } from "../src/index.js";
 import { DEFAULT_TEMPLATE, templateNamesFromSnapshot, resolvePromptFromSnapshot } from "../src/resolver.js";
@@ -145,7 +144,7 @@ describe("prompt.json", () => {
 
   it("every prompt document decodes as a supported schema", () => {
     for (const data of documents.values()) {
-      expect([5, SCHEMA_VERSION]).toContain(data.schemaVersion);
+      expect([5, 6, SCHEMA_VERSION]).toContain(data.schemaVersion);
     }
   });
 
@@ -153,7 +152,7 @@ describe("prompt.json", () => {
     const base = doc["documents"]["production"] as Record<string, unknown>;
     for (const patch of [
       { schema_version: 3 },
-      { schema_version: 7 },
+      { schema_version: 8 },
       { schema_version: "5" },
       { schema_version: undefined },
     ]) {
@@ -218,7 +217,7 @@ function resolveExpectation(
         testCase.variables === undefined
           ? resolution.messages
           : renderMessages(resolution.messages, testCase.variables, resolution.engine ?? "liquid");
-      rendered["messages"] = messages.map((m: Message) => ({ role: m.role, content: m.content }));
+      rendered["messages"] = messages;
     } else if (resolution.kind === "text" && typeof resolution.textTemplate === "string") {
       rendered["text"] =
         testCase.variables === undefined
