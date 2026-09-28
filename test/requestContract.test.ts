@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
 import { PreparedRequestError, PromptOn, Result } from "../src/index.js";
 import { fakeFetch, snapshotDocument, snapshotResponse } from "./helpers.js";
@@ -85,6 +86,25 @@ it("legacy v5 ignores injected request metadata and v6 requires the immutable ve
   const versionId = (partial["deployments"] as any)["greeting"]["template_pins"]["default"];
   delete (partial["prompt_versions"] as any)[versionId]["kind"];
   expect(() => loaded(partial).prompt("greeting").request({ name: "Ada" })).toThrow(PreparedRequestError);
+});
+
+it("matches the preview HTTP render provider request for native tool history", () => {
+  const fixture = JSON.parse(readFileSync(new URL("./conformance/http_contract.json", import.meta.url), "utf8"));
+  const client = loaded(fixture.snapshot);
+  const request = client.prompt(fixture.render.key).request({
+    locale: "ko-KR",
+    topic: "park walks",
+    history: fixture.render.request.body.messages.slice(1, 4),
+  });
+
+  expect(request).toEqual(fixture.render.request);
+  const body = request.body as any;
+  expect(body.messages[2].tool_calls[0].id).toBe("call_prior_1");
+  expect(body.messages[3].tool_call_id).toBe("call_prior_1");
+  expect(body.messages[5].tool_calls[0].id).toBe("call_history_1");
+  expect(body.messages[6].tool_call_id).toBe("call_history_1");
+  expect(body.tools[0].function.output_schema).toBeUndefined();
+  expect(body.tools[0].output_schema).toBeUndefined();
 });
 
 it("remote Decision rendering and its cache retain native content and the prepared POST request", async () => {

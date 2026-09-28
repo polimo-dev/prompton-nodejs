@@ -609,11 +609,11 @@ describe("trace events", () => {
         logs: [],
         events: [{ ...event, sdk: { name: "prompton-nodejs", version: VERSION } }],
       });
-      return new Response(JSON.stringify({ accepted: 1, duplicates: 0, rejected: [] }), { status: 202 });
+      return new Response(JSON.stringify({ accepted: 1, duplicates: 0, rejected: [], events: { accepted: 2, duplicates: 0, rejected: [] } }), { status: 202 });
     });
     const client = make({ mode: "live", apiKey: "ptn_sdkfixture_key", environment: "staging", baseUrl: "http://ptn.test", fetch });
 
-    await expect(client.logEvents([event])).resolves.toEqual({ accepted: 1, duplicates: 0, rejected: [] });
+    await expect(client.logEvents([event])).resolves.toEqual({ accepted: 2, duplicates: 0, rejected: [] });
 
     expect(fetch.calls.filter((call) => call.url.includes("/logs"))).toHaveLength(1);
   });

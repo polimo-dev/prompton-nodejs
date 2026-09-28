@@ -872,7 +872,11 @@ function prepareTraceEvents(events: readonly TraceEvent[]): TraceEvent[] {
 
 function parseTraceEventResult(text: string): TraceEventResult {
   const body = parseJson(text);
-  const record = body && typeof body === "object" ? body as Record<string, unknown> : {};
+  const envelope = body && typeof body === "object" ? body as Record<string, unknown> : {};
+  const nested = envelope["events"];
+  const record = nested && typeof nested === "object" && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : envelope;
   return {
     accepted: typeof record["accepted"] === "number" ? record["accepted"] : 0,
     duplicates: typeof record["duplicates"] === "number" ? record["duplicates"] : 0,
@@ -1078,10 +1082,13 @@ function stripToolMetadata(tool: unknown): Record<string, unknown> {
   if (!isPlainRecord(fn["parameters"])) {
     throw new PreparedRequestError("canonical function tools require function.parameters");
   }
+  const cleanTool = { ...tool };
+  delete cleanTool["output_schema"];
+  delete cleanTool["output_examples"];
   const cleanFunction = { ...fn };
   delete cleanFunction["output_schema"];
   delete cleanFunction["output_examples"];
-  return { ...tool, function: cleanFunction };
+  return { ...cleanTool, function: cleanFunction };
 }
 
 function sameJson(left: unknown, right: unknown): boolean {
