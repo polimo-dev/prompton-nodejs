@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { decodePromptDocumentJson, type PromptDocument } from "./snapshotData.js";
 import type { ResolutionSource } from "./resolver.js";
 import type { Logger } from "./logger.js";
@@ -21,6 +21,8 @@ export interface PromptDocumentEntry {
   fetchedAt: number;
   /** When the last refresh started failing; `null` while the document is fresh. */
   staleSince: number | null;
+  /** Non-null when this entry came from the per-prompt disk cache. */
+  cacheKey?: string | null;
 }
 
 /** What `promptsInfo()` reports. */
@@ -123,6 +125,7 @@ export function loadPromptDocumentFile(
   source: ResolutionSource,
   environment: string,
   project: string | null,
+  cacheKey: string | null = null,
 ): LoadResult {
   let raw: string;
   try {
@@ -167,6 +170,7 @@ export function loadPromptDocumentFile(
       source,
       fetchedAt: Number.isNaN(fetchedAt) ? Date.now() : fetchedAt,
       staleSince: null,
+      cacheKey,
     },
   };
 }
@@ -174,6 +178,11 @@ export function loadPromptDocumentFile(
 /** The sidecar path for a snapshot file. */
 export function sidecarPath(path: string): string {
   return `${path}.meta.json`;
+}
+
+/** The per-prompt disk-cache file beside the legacy aggregate disk cache. */
+export function promptDiskCachePath(path: string, prompt: string): string {
+  return join(`${path}.prompts`, `${encodeURIComponent(prompt)}.json`);
 }
 
 /**
@@ -228,6 +237,40 @@ export function describeFailure(path: string, source: string, failure: LoadFailu
     default:
       return null;
   }
+}
+
+
+/** Loads a prompt-specific document from disk, then falls back to aggregate disk and bundle files. */
+export function loadLocalPromptSnapshot(
+  prompt: string,
+  diskCachePath: string | null,
+  bundlePath: string | null,
+  environment: string,
+  project: string | null,
+  logger: Logger,
+): PromptDocumentEntry | null {
+  const candidates: [string, ResolutionSource][] = [];
+  if (diskCachePath) candidates.push([promptDiskCachePath(diskCachePath, prompt), "disk"]);
+  if (diskCachePath) candidates.push([diskCachePath, "disk"]);
+  if (bundlePath) candidates.push([bundlePath, "bundle"]);
+
+  for (const [path, source] of candidates) {
+    const result = loadPromptDocumentFile(
+      path,
+      source,
+      environment,
+      project,
+      path === promptDiskCachePath(diskCachePath ?? "", prompt) ? prompt : null,
+    );
+    if (result.ok) {
+      if (!result.entry.data.prompts[prompt]) continue;
+      logger.info(`loaded prompt ${prompt} from ${source} (${path})`);
+      return result.entry;
+    }
+    const message = describeFailure(path, source, result.failure);
+    if (message) logger.warn(message);
+  }
+  return null;
 }
 
 /** Loads memory → disk → bundle, in that order, and returns the first usable document. */

@@ -323,6 +323,75 @@ describe("the server being down", () => {
 });
 
 describe("the three tiers", () => {
+
+  it("restores each prompt from its own disk document after restart when remote is down", async () => {
+    const dir = tempDir();
+    cleanups.push(dir.cleanup);
+    const path = join(dir.path, "snap.json");
+
+    const greeting = snapshotDocument();
+    greeting.prompts = { greeting: (greeting.prompts as Record<string, unknown>).greeting };
+    greeting.deployments = { greeting: (greeting.deployments as Record<string, unknown>).greeting };
+    greeting.prompt_versions = {
+      "0198f2a1-0000-7000-8000-00000000a001": (greeting.prompt_versions as Record<string, unknown>)[
+        "0198f2a1-0000-7000-8000-00000000a001"
+      ],
+      "0198f2a1-0000-7000-8000-00000000a002": (greeting.prompt_versions as Record<string, unknown>)[
+        "0198f2a1-0000-7000-8000-00000000a002"
+      ],
+    };
+    (greeting.models as Record<string, { model_id: string }>)[
+      "0198f2a1-0000-7000-8000-00000000e001"
+    ]!.model_id = "provider/model-a";
+
+    const summarize = snapshotDocument();
+    summarize.prompts = { summarize: (summarize.prompts as Record<string, unknown>).summarize };
+    summarize.deployments = { summarize: (summarize.deployments as Record<string, unknown>).summarize };
+    summarize.prompt_versions = {
+      "0198f2a1-0000-7000-8000-00000000a003": (summarize.prompt_versions as Record<string, unknown>)[
+        "0198f2a1-0000-7000-8000-00000000a003"
+      ],
+    };
+    (summarize.models as Record<string, { model_id: string }>)[
+      "0198f2a1-0000-7000-8000-00000000e001"
+    ]!.model_id = "provider/model-b";
+
+    const fetch = fakeFetch((url) => {
+      if (url.includes("/prompts/greeting")) return snapshotResponse(greeting, '"greeting"');
+      if (url.includes("/prompts/summarize")) return snapshotResponse(summarize, '"summarize"');
+      throw new TypeError("fetch failed");
+    });
+    const first = make({
+      apiKey: "ptn_sdkfixture_key",
+      baseUrl: "http://ptn.test",
+      fetch,
+      diskCache: path,
+      poll: false,
+    });
+
+    expect((await first.prompt("greeting")).model).toBe("provider/model-a");
+    expect((await first.prompt("summarize")).model).toBe("provider/model-b");
+    await first.close(100);
+    clients.splice(clients.indexOf(first), 1);
+
+    const down = fakeFetch(() => {
+      throw new TypeError("fetch failed");
+    });
+    const restarted = make({
+      apiKey: "ptn_sdkfixture_key",
+      baseUrl: "http://ptn.test",
+      fetch: down,
+      diskCache: path,
+      poll: false,
+    });
+
+    expect((await restarted.prompt("greeting")).model).toBe("provider/model-a");
+    expect((await restarted.prompt("summarize")).model).toBe("provider/model-b");
+    expect(down.calls.map((call) => new URL(call.url).pathname)).toEqual([
+      "/api/v1/prompts/greeting",
+      "/api/v1/prompts/summarize",
+    ]);
+  });
   it("mirrors a fetched snapshot to disk atomically and reads it back on the next start", async () => {
     const dir = tempDir();
     cleanups.push(dir.cleanup);
@@ -339,7 +408,8 @@ describe("the three tiers", () => {
     await first.ready();
     await first.prompt("greeting");
 
-    const sidecar = JSON.parse(readFileSync(`${path}.meta.json`, "utf8")) as Record<string, unknown>;
+    const promptPath = join(`${path}.prompts`, `${encodeURIComponent("greeting")}.json`);
+    const sidecar = JSON.parse(readFileSync(`${promptPath}.meta.json`, "utf8")) as Record<string, unknown>;
     expect(sidecar["etag"]).toBe('"sha256-disk"');
     expect(sidecar["environment"]).toBe("production");
     expect(sidecar["project"]).toBe("sdkfixture");
@@ -347,7 +417,6 @@ describe("the three tiers", () => {
     const offline = make({ mode: "offline", diskCache: path, project: "sdkfixture" });
     expect((await offline.prompt("greeting")).source).toBe("disk");
     expect(offline.promptsInfo().etag).toBe('"sha256-disk"');
-    expect((await offline.prompt("sentiment")).request({ diary: "offline" }).path).toBe("/api/v1/systemone");
   });
 
   it("keeps preparing legacy cached Decision requests from disk", async () => {

@@ -2,7 +2,9 @@ import type { ResolvedConfig } from "./config.js";
 import { errorMessage, request, TransportError } from "./http.js";
 import { decodePromptDocumentJson } from "./snapshotData.js";
 import {
+  loadLocalPromptSnapshot,
   loadLocalSnapshot,
+  promptDiskCachePath,
   writePromptDocumentFile,
   type PromptDocumentEntry,
   type SnapshotStore,
@@ -154,9 +156,27 @@ export class SnapshotManager {
   }
 
   private localEntryFor(prompt: string): PromptDocumentEntry | null {
+    const state = this.promptStates.get(prompt);
+    if (state?.entry) return state.entry;
+    const loaded = loadLocalPromptSnapshot(
+      prompt,
+      this.config.diskCachePath,
+      this.config.bundlePath,
+      this.config.environment,
+      this.config.project,
+      this.quiet,
+    );
+    if (loaded) {
+      const promptState = this.stateFor(prompt);
+      promptState.entry = loaded;
+      promptState.lastSuccessAt = loaded.source === "remote" ? loaded.fetchedAt : 0;
+      this.store.set(loaded);
+      return loaded;
+    }
     const entry = this.store.get();
     if (!entry) return null;
-    if (entry.data.prompts[prompt] || entry.source !== "remote") return entry;
+    if (entry.cacheKey && entry.cacheKey !== prompt) return null;
+    if (entry.data.prompts[prompt] || !entry.cacheKey) return entry;
     return null;
   }
 
@@ -183,7 +203,7 @@ export class SnapshotManager {
       state.lastSuccessAt = Date.now();
       state.lastError = null;
       this.store.set(entry);
-      this.mirrorToDisk(entry);
+      this.mirrorToDisk(prompt, entry);
       return entry;
     } catch (error) {
       const captured = error instanceof Error ? error : new Error(String(error));
@@ -273,6 +293,7 @@ export class SnapshotManager {
       source: "remote",
       fetchedAt: Date.now(),
       staleSince: null,
+      cacheKey: prompt,
     };
     this.logger.info(
       `prompt config updated (prompt=${prompt}, environment=${String(decoded.data.environment)}, etag=${String(etag)})`,
@@ -295,9 +316,10 @@ export class SnapshotManager {
     }
   }
 
-  private mirrorToDisk(entry: PromptDocumentEntry): void {
-    const path = this.config.diskCachePath;
-    if (!path) return;
+  private mirrorToDisk(prompt: string, entry: PromptDocumentEntry): void {
+    const basePath = this.config.diskCachePath;
+    if (!basePath) return;
+    const path = promptDiskCachePath(basePath, prompt);
     try {
       writePromptDocumentFile(path, entry.raw, {
         etag: entry.etag,
