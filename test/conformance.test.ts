@@ -166,6 +166,13 @@ describe("prompt.json", () => {
     expect(() => decodePromptDocument(legacy)).toThrow(/schema_version/u);
   });
 
+  it("requires deployment revisions to be strings", () => {
+    const candidate = JSON.parse(JSON.stringify(doc["documents"]["production"])) as Record<string, unknown>;
+    const deployments = candidate["deployments"] as Record<string, Record<string, unknown>>;
+    deployments["greeting"]!["revision"] = 1;
+    expect(() => decodePromptDocument(candidate)).toThrow(/revision must be a string/u);
+  });
+
   for (const testCase of doc["cases"] as {
     name: string;
     document_ref: string;

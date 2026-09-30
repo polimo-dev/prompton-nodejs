@@ -24,7 +24,7 @@ const suite = apiKey ? describe : describe.skip;
 interface ResolveResponse {
   key: string;
   kind: string;
-  deployment: { id: string; revision: number };
+  deployment: { id: string; revision: string };
   template: string | null;
   template_names: string[];
   model: string;

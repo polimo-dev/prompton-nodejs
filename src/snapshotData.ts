@@ -27,7 +27,7 @@ export interface InputVariable {
 export interface PromptDeployment {
   id: string | null;
   promptKey: string;
-  revision: number | null;
+  revision: string | null;
   modelId: string | null;
   api: "chat_completions" | "decisions" | (string & {}) | null;
   requestPath: string | null;
@@ -266,7 +266,7 @@ function decodeDeployments(
     deployments[key] = {
       id: asString(value["id"]),
       promptKey: asString(value["prompt_key"]) ?? key,
-      revision: asInteger(value["revision"]),
+      revision: asRevision(value["revision"], key),
       modelId: asString(value["model_id"]),
       api: schemaVersion >= 6 ? asString(value["api"]) : null,
       requestPath: schemaVersion >= 6 ? asString(value["request_path"]) : null,
@@ -391,6 +391,12 @@ function asString(value: unknown): string | null {
   if (typeof value === "string") return value;
   if (typeof value === "number") return String(value);
   return null;
+}
+
+function asRevision(value: unknown, key: string): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value;
+  throw new Error(`deployment ${key} revision must be a string like v2026.09.30-1`);
 }
 
 function asInteger(value: unknown): number | null {

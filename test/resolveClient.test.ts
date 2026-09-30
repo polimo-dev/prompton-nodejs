@@ -23,7 +23,7 @@ afterEach(async () => {
 const RESOLVE_BODY = {
   key: "greeting",
   kind: "chat",
-  deployment: { id: "0198f2a1-0000-7000-8000-00000000d001", revision: 3 },
+  deployment: { id: "0198f2a1-0000-7000-8000-00000000d001", revision: "v2026.09.30-3" },
   template: "default",
   template_names: ["default", "ko"],
   model_id: "0198f2a1-0000-7000-8000-00000000e001",
@@ -163,6 +163,18 @@ describe("renderPrompt", () => {
     }
 
     expect(resolveCalls).toBe(2);
+  });
+
+  it("rejects numeric deployment revisions in prompt render responses", async () => {
+    const fetch = fakeFetch((url) => {
+      if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
+      return new Response(
+        JSON.stringify({ ...RESOLVE_BODY, deployment: { id: RESOLVE_BODY.deployment.id, revision: 1 } }),
+        { status: 200 },
+      );
+    });
+    const client = make(fetch);
+    await expect(client.renderPrompt("greeting")).rejects.toThrow(/revision must be a string/u);
   });
 
   it("backs off exponentially from the TTL when the server sends no Retry-After", async () => {

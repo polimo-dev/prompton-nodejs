@@ -61,7 +61,7 @@ export function snapshotDocument(
     deployments: {
       greeting: {
         id: "0198f2a1-0000-7000-8000-00000000d001",
-        revision: 3,
+        revision: "v2026.09.30-3",
         model_id: "0198f2a1-0000-7000-8000-00000000e001",
         api: "chat_completions",
         request_path: "/api/v1/chat/completions",
@@ -74,7 +74,7 @@ export function snapshotDocument(
       },
       summarize: {
         id: "0198f2a1-0000-7000-8000-00000000d002",
-        revision: 1,
+        revision: "v2026.09.30-1",
         model_id: "0198f2a1-0000-7000-8000-00000000e001",
         api: "chat_completions",
         request_path: "/api/v1/chat/completions",
@@ -84,7 +84,7 @@ export function snapshotDocument(
       },
       embed: {
         id: "0198f2a1-0000-7000-8000-00000000d003",
-        revision: 2,
+        revision: "v2026.09.30-2",
         model_id: "0198f2a1-0000-7000-8000-00000000e002",
         api: null,
         request_path: null,
@@ -94,7 +94,7 @@ export function snapshotDocument(
       },
       sentiment: {
         id: "0198f2a1-0000-7000-8000-00000000d004",
-        revision: 5,
+        revision: "v2026.09.30-5",
         model_id: "0198f2a1-0000-7000-8000-00000000e003",
         api: "decisions",
         request_path: "/api/v1/systemone",

@@ -20,7 +20,7 @@
   "deployments": {
     "greeting": {
       "id": "01a069cb-0814-77f3-a866-5433348ac431",
-      "revision": 1,
+      "revision": "v2026.09.30-1",
       "model_id": "01a069cb-07c2-7e11-9011-85af7e778f96",
       "api": "chat_completions",
       "request_path": "/api/v1/chat/completions",

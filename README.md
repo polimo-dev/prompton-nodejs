@@ -185,7 +185,7 @@ the right side wins and an override of `null` is kept as `null`.
 |---|---|
 | `key`, `kind` | The key you asked for; `chat`, `decision`, `text` or `embedding` |
 | `template`, `templateNames` | The chosen template name (`null` for an embedding prompt) and every name this revision pins |
-| `deployment` | The pin that produced this |
+| `deployment` | The pin that produced this; `deployment.revision` is a string like `v2026.09.30-1` |
 | `promptVersion` | The pinned, immutable prompt version |
 | `model`, `modelId`, `provider` | The provider model string to send, the catalog UUID, and who serves it |
 | `params`, `providerOptions` | The effective merges above |
@@ -295,7 +295,7 @@ default treats the returned object as that shape already, and a returned string 
 |---|---|
 | `id` | The SDK — a UUIDv7, and the idempotency key: a resend is counted as a duplicate, never stored twice |
 | `prompt_key`, `kind`, `model`, `model_id`, `provider` | Prompt evidence |
-| `deployment_id`, `deployment_revision`, `template`, `prompt_version_id` | Prompt evidence — this is the evidence that ties an answer to a pin |
+| `deployment_id`, `deployment_revision`, `template`, `prompt_version_id` | Prompt evidence — this is the evidence that ties an answer to a pin. `deployment_revision` is a string like `v2026.09.30-1` |
 | `source` | `remote` / `disk` / `bundle` / `manual` |
 | `status`, `error` | `ok`, or `error` with `kind` (`http_4xx`, `http_5xx`, `rate_limited`, `timeout`, `transport`, `parse`, `app`), `status` and `message` |
 | `finish_reason`, `stop_kind` | The provider's raw reason, normalised to `stop` / `length` / `tool_call` / `content_filter` / `other` |

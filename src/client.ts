@@ -63,7 +63,7 @@ export interface RenderPromptOptions extends PromptOptions {
 export interface RenderedPrompt {
   key: string;
   kind: string;
-  deployment: { id: string | null; revision: number | null };
+  deployment: { id: string | null; revision: string | null };
   template: string | null;
   templateNames: string[];
   modelId: string | null;
@@ -179,7 +179,7 @@ export class Prompt {
     return this.currentResolution.requestPath;
   }
 
-  get deployment(): { id: string | null; revision: number | null } {
+  get deployment(): { id: string | null; revision: string | null } {
     return {
       id: this.currentResolution.deploymentId,
       revision: this.currentResolution.deploymentRevision,
@@ -1308,13 +1308,23 @@ function retryAfterOf(error: unknown): number | null {
 
 function mapRenderedPrompt(body: Record<string, unknown>): RenderedPrompt {
   const deployment = (body["deployment"] ?? {}) as Record<string, unknown>;
+  if (!deployment || typeof deployment !== "object" || Array.isArray(deployment)) {
+    throw new Error("prompt render deployment must be an object");
+  }
+  if (
+    deployment["revision"] !== null &&
+    deployment["revision"] !== undefined &&
+    typeof deployment["revision"] !== "string"
+  ) {
+    throw new Error("prompt render deployment revision must be a string like v2026.09.30-1");
+  }
   const version = body["prompt_version"];
   return {
     key: textOf(body["key"]),
     kind: textOf(body["kind"] ?? "chat"),
     deployment: {
       id: typeof deployment["id"] === "string" ? deployment["id"] : null,
-      revision: typeof deployment["revision"] === "number" ? deployment["revision"] : null,
+      revision: typeof deployment["revision"] === "string" ? deployment["revision"] : null,
     },
     template: typeof body["template"] === "string" ? body["template"] : null,
     templateNames: Array.isArray(body["template_names"]) ? (body["template_names"] as string[]) : [],

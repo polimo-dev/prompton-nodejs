@@ -37,7 +37,7 @@ export interface Resolution {
   availableTemplates: string[];
   /** The deployment revision that produced this resolution. */
   deploymentId: string | null;
-  deploymentRevision: number | null;
+  deploymentRevision: string | null;
   api: string | null;
   requestPath: string | null;
   /** The pinned prompt version. */
