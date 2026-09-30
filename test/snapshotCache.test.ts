@@ -292,6 +292,70 @@ describe("rate limiting and stale fallback", () => {
 });
 
 describe("the server being down", () => {
+  it("shares a 1-second slow-body fetch, keeps stale config, and lets other keys resolve", async () => {
+    let announceSlow: () => void = () => undefined;
+    const slowStarted = new Promise<void>((resolve) => { announceSlow = resolve; });
+    let greetingCalls = 0;
+    const stub = await startStubServer((request, response) => {
+      response.writeHead(200, { "content-type": "application/json", etag: '"e1"' });
+      if (request.path.includes("/prompts/greeting") && ++greetingCalls > 1) {
+        response.write(" ");
+        const drip = setInterval(() => response.write(" "), 40);
+        response.once("close", () => clearInterval(drip));
+        announceSlow();
+      } else {
+        response.end(JSON.stringify(snapshotDocument()));
+      }
+    });
+    try {
+      const clock = fakeClock();
+      const client = make({ apiKey: "ptn_sdkfixture_key", baseUrl: stub.url });
+      await client.ready();
+      expect(stub.requests).toHaveLength(0);
+      const original = await client.prompt("greeting");
+      clock.advance(10_001);
+      let finished = false;
+      const began = performance.now();
+      const owner = client.prompt("greeting").then((result) => { finished = true; return result; });
+      await slowStarted;
+      const waiters = Array.from({ length: 20 }, () => client.prompt("greeting"));
+      expect((await client.prompt("summarize")).text({ items: ["a"] })).toContain("a");
+      expect(finished).toBe(false);
+      const results = await Promise.all([owner, ...waiters]);
+      expect(performance.now() - began).toBeLessThan(1_750);
+      expect(results.every((result) => result.model === original.model)).toBe(true);
+      expect(greetingCalls).toBe(2);
+      await client.prompt("greeting");
+      expect(stub.requests).toHaveLength(3);
+    } finally {
+      await stub.close();
+    }
+  });
+
+  it("keeps the previous config when synchronous decoding exceeds the original deadline", async () => {
+    const clock = fakeClock();
+    const updated = snapshotDocument();
+    (updated.models as Record<string, { model_id: string }>)[
+      "0198f2a1-0000-7000-8000-00000000e001"
+    ]!.model_id = "provider/late-model";
+    const fetch = fakeFetch((_url, _init, call) =>
+      snapshotResponse(call === 0 ? snapshotDocument() : updated, call === 0 ? '"e1"' : '"e2"'),
+    );
+    const client = make({ apiKey: "ptn_sdkfixture_key", baseUrl: "http://ptn.test", fetch });
+    const original = await client.prompt("greeting");
+    clock.advance(10_001);
+    const parse = JSON.parse;
+    vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+      const value = parse(text, reviver);
+      if (text.includes("provider/late-model")) clock.advance(1_001);
+      return value;
+    });
+
+    expect((await client.prompt("greeting")).model).toBe(original.model);
+    expect(client.promptsInfo().etag).toBe('"e1"');
+    expect(fetch.calls.length).toBe(2);
+  });
+
   it("keeps resolving from the last good snapshot when the connection is refused", async () => {
     const stub = await startStubServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json", etag: '"e1"' });

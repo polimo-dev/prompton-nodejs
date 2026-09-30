@@ -197,8 +197,11 @@ export class SnapshotManager {
     state: PromptState,
     fallback: PromptDocumentEntry | null,
   ): Promise<PromptDocumentEntry> {
+    const deadline = Date.now() + CONFIG_FETCH_TIMEOUT_MS;
     try {
       const entry = await this.withDeadline(this.fetchPromptOnce(prompt, state), CONFIG_FETCH_TIMEOUT_MS);
+      // Synchronous decoding can delay the timer callback; check elapsed time before committing.
+      if (Date.now() > deadline) throw new TransportError("request timed out", null);
       state.entry = entry;
       state.lastSuccessAt = Date.now();
       state.lastError = null;
