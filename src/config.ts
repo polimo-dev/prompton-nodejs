@@ -36,7 +36,7 @@ export interface PromptOnOptions {
   cacheTtlMs?: number;
   /** Per-request timeout. Default 5000 ms. */
   requestTimeoutMs?: number;
-  /** Timeout of the very first prompt document fetch, which never blocks a generation. Default 3000 ms. */
+  /** Deprecated: config fetch is demand-driven and always uses a 1000 ms budget. */
   initialFetchTimeoutMs?: number;
   /** `true` (default) for the standard path, `false` to disable, or an explicit file path. */
   diskCache?: boolean | string;
@@ -58,7 +58,7 @@ export interface PromptOnOptions {
   strictRecords?: boolean;
   /** Monitoring-log buffer knobs. */
   log?: LogOptions;
-  /** Poll for prompt document changes in the background. Default `true` outside test mode. */
+  /** Deprecated: normal runtime config fetch is demand-driven and does not poll. */
   poll?: boolean;
   /** Flush the log buffer when the process is about to exit. Default `true`. */
   flushOnExit?: boolean;
@@ -144,7 +144,7 @@ export function resolveConfig(
       maxQueue: positive(options.log?.maxQueue, DEFAULT_LOG.maxQueue, "log.maxQueue"),
       maxAttempts: positive(options.log?.maxAttempts, DEFAULT_LOG.maxAttempts, "log.maxAttempts"),
     },
-    poll: options.poll ?? mode === "live",
+    poll: options.poll ?? false,
     flushOnExit: options.flushOnExit ?? true,
     fetch: options.fetch ?? globalThis.fetch,
     logger,

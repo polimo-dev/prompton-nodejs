@@ -35,7 +35,12 @@ import {
 } from "./resolver.js";
 import { decodePromptDocument, type PayloadPolicy, type ToolDefinitions } from "./snapshotData.js";
 import { SnapshotManager, type RefreshResult } from "./snapshot.js";
-import { SnapshotStore, writePromptDocumentFile, type PromptsInfo } from "./store.js";
+import {
+  SnapshotStore,
+  writePromptDocumentFile,
+  type PromptDocumentEntry,
+  type PromptsInfo,
+} from "./store.js";
 import { render as renderTemplate, renderMessages, type Message } from "./template.js";
 import type { DecisionTemplate } from "./snapshotData.js";
 import { canonicalJson, textOf } from "./json.js";
@@ -313,7 +318,6 @@ export class PromptOn {
   private readonly captured: LogRecord[] = [];
   private readonly capturedEvents: TraceEvent[] = [];
   private readonly quiet: Logger;
-  private readyPromise: Promise<RefreshResult> | null = null;
   private exitHandler: (() => void) | null = null;
   private closed = false;
 
@@ -334,14 +338,6 @@ export class PromptOn {
       );
     }
 
-    if (this.snapshots.remoteEnabled) {
-      this.readyPromise = this.snapshots.refresh({
-        timeoutMs: this.config.initialFetchTimeoutMs,
-      });
-      this.readyPromise.catch(() => undefined);
-      this.snapshots.start();
-    }
-
     if (this.config.flushOnExit && this.config.mode !== "test") {
       this.exitHandler = () => {
         void this.buffer.flush(2000).catch(() => undefined);
@@ -358,10 +354,10 @@ export class PromptOn {
    * or the bundle without it — but a short-lived script wants it.
    */
   async ready(): Promise<RefreshResult> {
-    return (
-      this.readyPromise ??
-      Promise.resolve<RefreshResult>({ status: "skipped", reason: "no remote configured" })
-    );
+    return Promise.resolve<RefreshResult>({
+      status: "skipped",
+      reason: "config fetch is demand-driven; call prompt(key) to fetch one prompt",
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -374,23 +370,29 @@ export class PromptOn {
    * Within the cache TTL nothing is fetched. Past it, a background refresh starts and this call
    * still answers from the document it already has.
    */
-  prompt(prompt: string, options: PromptOptions = {}): Prompt {
+  async prompt(prompt: string, options: PromptOptions = {}): Promise<Prompt> {
+    const entry = await this.entryForPrompt(prompt);
     return new Prompt(
-      this.promptFromDocument(prompt, options),
-      (template) => this.promptFromDocument(prompt, { template }),
+      this.promptFromEntry(entry, prompt, options),
+      (template) => this.promptFromEntry(entry, prompt, { template }),
       (current, meta, call, extractResult) =>
         this.trackPrompt(current, meta, call, extractResult),
     );
   }
 
-  private promptFromDocument(prompt: string, options: PromptOptions = {}): Resolution {
-    this.snapshots.ensureFresh();
-    const entry = this.store.get();
-    if (!entry) {
-      throw new NotReadyError(
-        `no prompt document for environment ${this.config.environment}: PromptOn is unreachable and nothing is cached on disk or bundled`,
-      );
+  private async entryForPrompt(prompt: string) {
+    try {
+      return await this.snapshots.entryForPrompt(prompt);
+    } catch (error) {
+      throw new NotReadyError((error as Error).message);
     }
+  }
+
+  private promptFromEntry(
+    entry: PromptDocumentEntry,
+    prompt: string,
+    options: PromptOptions = {},
+  ): Resolution {
     return resolvePromptFromSnapshot(entry.data, prompt, {
       template: options.template ?? DEFAULT_TEMPLATE,
       source: entry.source,
@@ -727,7 +729,7 @@ export class PromptOn {
   }
 
   /** Fetches a prompt document once, now, and waits for it. Never throws. */
-  async refresh(options: { timeoutMs?: number } = {}): Promise<RefreshResult> {
+  async refresh(options: { timeoutMs?: number; prompt?: string } = {}): Promise<RefreshResult> {
     if (this.config.mode === "offline") {
       this.snapshots.reloadLocal();
       return { status: "skipped", reason: "offline mode reloaded the local prompt document" };

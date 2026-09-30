@@ -10,7 +10,7 @@
  * import { PromptOn } from "prompton-sdk";
  *
  * const prompton = new PromptOn();
- * const prompt = prompton.prompt("greeting");
+ * const prompt = await prompton.prompt("greeting");
  * const messages = prompt.messages({ name: "Ada" });
  * ```
  */

@@ -1,5 +1,5 @@
 /** The published version of this SDK. Sent as `sdk.version` on every monitoring log. */
-export const VERSION = "0.4.1";
+export const VERSION = "0.5.0";
 
 /** The `sdk.name` every monitoring log carries. */
 export const SDK_NAME = "prompton-nodejs";

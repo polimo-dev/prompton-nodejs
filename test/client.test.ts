@@ -41,9 +41,9 @@ afterEach(async () => {
 });
 
 describe("resolution", () => {
-  it("resolves a chat prompt and renders it", () => {
+  it("resolves a chat prompt and renders it", async () => {
     const client = loaded();
-    const prompt = client.prompt("greeting");
+    const prompt = await client.prompt("greeting");
     expect({
       key: prompt.key,
       kind: prompt.kind,
@@ -73,9 +73,9 @@ describe("resolution", () => {
     ]);
   });
 
-  it("selects a prompt by name", () => {
+  it("selects a prompt by name", async () => {
     const client = loaded();
-    const messages = client.prompt("greeting", { template: "ko" }).messages({
+    const messages = (await client.prompt("greeting", { template: "ko" })).messages({
       name: "아다",
     });
     expect((messages[1] as Message).content).toBe("아다님에게 인사해줘.");
@@ -83,7 +83,7 @@ describe("resolution", () => {
 
   it("uses the prompt selected during render as the following track evidence", async () => {
     const client = loaded();
-    const prompt = client.prompt("greeting");
+    const prompt = await client.prompt("greeting");
 
     expect(prompt.messages({ name: "아다" }, { template: "ko" })[1]?.content).toBe(
       "아다님에게 인사해줘.",
@@ -98,7 +98,7 @@ describe("resolution", () => {
 
   it("does not let a failed named-prompt render poison following track evidence", async () => {
     const client = loaded();
-    const prompt = client.prompt("greeting");
+    const prompt = await client.prompt("greeting");
 
     expect(() => prompt.messages({}, { template: "ko" })).toThrowError(MissingVariableError);
     await prompt.track(() => ({ content: "Hello", finishReason: "stop" }));
@@ -110,15 +110,15 @@ describe("resolution", () => {
     });
   });
 
-  it("renders a text prompt", () => {
+  it("renders a text prompt", async () => {
     const client = loaded();
-    const text = client.prompt("summarize").text({ items: ["a", "b"] });
+    const text = (await client.prompt("summarize")).text({ items: ["a", "b"] });
     expect(text).toBe("Summarize:\n- a\n- b\n");
   });
 
-  it("prepares a chat completions request without calling the provider", () => {
+  it("prepares a chat completions request without calling the provider", async () => {
     const client = loaded();
-    const request = client.prompt("greeting").request(
+    const request = (await client.prompt("greeting")).request(
       { name: "Ada" },
       { params: { temperature: 0.4, max_tokens: null } },
     );
@@ -140,15 +140,16 @@ describe("resolution", () => {
     });
   });
 
-  it("rejects protected chat request parameters", () => {
+  it("rejects protected chat request parameters", async () => {
     const client = loaded();
-    expect(() => client.prompt("greeting").request({ name: "Ada" }, { params: { model: "x" } }))
+    const prompt = await client.prompt("greeting");
+    expect(() => prompt.request({ name: "Ada" }, { params: { model: "x" } }))
       .toThrowError(PreparedRequestError);
   });
 
-  it("prepares a Decisions request by rendering state and guidance values", () => {
+  it("prepares a Decisions request by rendering state and guidance values", async () => {
     const client = loaded();
-    const request = client.prompt("sentiment").request(
+    const request = (await client.prompt("sentiment")).request(
       { diary: "Today was bright" },
       {
         providerOptions: { order: ["Fireworks"] },
@@ -188,25 +189,26 @@ describe("resolution", () => {
     });
   });
 
-  it("rejects Decisions sampling params because the API only accepts explicit metadata", () => {
+  it("rejects Decisions sampling params because the API only accepts explicit metadata", async () => {
     const client = loaded();
-    expect(() => client.prompt("sentiment").request({ diary: "x" }, { params: { temperature: 0 } }))
+    const prompt = await client.prompt("sentiment");
+    expect(() => prompt.request({ diary: "x" }, { params: { temperature: 0 } }))
       .toThrowError(PreparedRequestError);
   });
 
-  it("accepts only Decisions metadata params", () => {
+  it("accepts only Decisions metadata params", async () => {
     const client = loaded();
-    const request = client.prompt("sentiment").request(
+    const request = (await client.prompt("sentiment")).request(
       { diary: "x" },
       { params: { session_id: "s1", user: "u1", trace: { id: "t1" } } },
     );
     expect(request.body).toMatchObject({ session_id: "s1", user: "u1", trace: { id: "t1" } });
-    expect(() =>
-      client.prompt("sentiment").request({ diary: "x" }, { params: { trace: "t1" } }),
-    ).toThrowError(PreparedRequestError);
+    const prompt = await client.prompt("sentiment");
+    expect(() => prompt.request({ diary: "x" }, { params: { trace: "t1" } }))
+      .toThrowError(PreparedRequestError);
   });
 
-  it("keeps legacy schema 5 documents readable but cannot prepare requests without metadata", () => {
+  it("keeps legacy schema 5 documents readable but cannot prepare requests without metadata", async () => {
     const legacy = snapshotDocument();
     legacy["schema_version"] = 5;
     for (const deployment of Object.values(legacy["deployments"] as Record<string, Record<string, unknown>>)) {
@@ -216,22 +218,23 @@ describe("resolution", () => {
     const client = make({ mode: "test" });
     client.loadPrompts(legacy);
 
-    expect(client.prompt("greeting").messages({ name: "Ada" })[1]?.content).toBe("Say hello to Ada.");
-    expect(() => client.prompt("greeting").request({ name: "Ada" })).toThrowError(PreparedRequestError);
+    const prompt = await client.prompt("greeting");
+    expect(prompt.messages({ name: "Ada" })[1]?.content).toBe("Say hello to Ada.");
+    expect(() => prompt.request({ name: "Ada" })).toThrowError(PreparedRequestError);
   });
 
-  it("has no template for an embedding prompt", () => {
+  it("has no template for an embedding prompt", async () => {
     const client = loaded();
-    const prompt = client.prompt("embed");
+    const prompt = await client.prompt("embed");
     expect(prompt.template).toBeNull();
     expect(prompt.promptVersion).toBeNull();
     expect(() => prompt.messages()).toThrowError(NoTemplateError);
   });
 
-  it("reports a missing variable by name", () => {
+  it("reports a missing variable by name", async () => {
     const client = loaded();
     try {
-      client.prompt("greeting").messages({});
+      (await client.prompt("greeting")).messages({});
       expect.unreachable("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(MissingVariableError);
@@ -239,10 +242,10 @@ describe("resolution", () => {
     }
   });
 
-  it("refuses an unpinned prompt name rather than falling back to default", () => {
+  it("refuses an unpinned prompt name rather than falling back to default", async () => {
     const client = loaded();
     try {
-      client.prompt("greeting", { template: "fr" });
+      await client.prompt("greeting", { template: "fr" });
       expect.unreachable("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(UnknownTemplateError);
@@ -250,10 +253,10 @@ describe("resolution", () => {
     }
   });
 
-  it("distinguishes an unknown prompt from one that is not deployed", () => {
+  it("distinguishes an unknown prompt from one that is not deployed", async () => {
     const client = loaded();
-    expect(() => client.prompt("nope")).toThrowError(UnknownPromptError);
-    expect(() => client.prompt("draft")).toThrowError(UnresolvedError);
+    await expect(client.prompt("nope")).rejects.toThrowError(UnknownPromptError);
+    await expect(client.prompt("draft")).rejects.toThrowError(UnresolvedError);
   });
 
   it("lists the pinned prompt names", () => {
@@ -267,7 +270,7 @@ describe("test mode", () => {
   it("captures records instead of sending them, and makes no HTTP call", async () => {
     const fetch = fakeFetch(() => new Response("{}", { status: 200 }));
     const client = loaded({ apiKey: "ptn_k_1", baseUrl: "http://ptn.test", fetch });
-    const prompt = client.prompt("greeting");
+    const prompt = await client.prompt("greeting");
 
     await prompt.track(
       () => ({ content: "Hello, Ada!", finishReason: "stop", usage: { inputTokens: 8, outputTokens: 4 } }),
@@ -297,7 +300,7 @@ describe("test mode", () => {
 
   it("logs the failure and rethrows the original error unchanged", async () => {
     const client = loaded();
-    const prompt = client.prompt("greeting");
+    const prompt = await client.prompt("greeting");
     const boom = Object.assign(new Error("rate limited by upstream"), { status: 429 });
 
     await expect(
@@ -318,14 +321,14 @@ describe("test mode", () => {
   it("returns the call's own value untouched", async () => {
     const client = loaded();
     const value = { content: "hi", extra: [1, 2, 3] };
-    const returned = await client.prompt("greeting").track(() => value);
+    const returned = await (await client.prompt("greeting")).track(() => value);
     expect(returned).toBe(value);
   });
 
   it("never lets a broken record replace the provider's own error", async () => {
     const logger = recordingLogger();
     const client = loaded({ logger, strictRecords: true });
-    const resolution = (client.prompt("greeting") as unknown as { currentResolution: object })
+    const resolution = (await client.prompt("greeting") as unknown as { currentResolution: object })
       .currentResolution;
     const poisoned = Object.create(Object.getPrototypeOf(resolution) as object, {
       ...Object.getOwnPropertyDescriptors(resolution),
@@ -355,7 +358,7 @@ describe("test mode", () => {
 
   it("never lets a broken record fail a successful call", async () => {
     const client = loaded({ strictRecords: true });
-    const resolution = (client.prompt("greeting") as unknown as { currentResolution: object })
+    const resolution = (await client.prompt("greeting") as unknown as { currentResolution: object })
       .currentResolution;
     const poisoned = Object.create(Object.getPrototypeOf(resolution) as object, {
       ...Object.getOwnPropertyDescriptors(resolution),
@@ -387,9 +390,9 @@ describe("log()", () => {
     expect(log["sdk"]).toEqual({ name: "prompton-nodejs", version: VERSION });
   });
 
-  it("fills the prompt evidence when a prompt is passed", () => {
+  it("fills the prompt evidence when a prompt is passed", async () => {
     const client = loaded();
-    const prompt = client.prompt("greeting", { template: "ko" });
+    const prompt = await client.prompt("greeting", { template: "ko" });
     client.log({ status: "ok" }, { prompt });
     expect(client.logs[0]).toMatchObject({
       prompt_key: "greeting",
@@ -570,7 +573,7 @@ describe("offline mode", () => {
     const fetch = fakeFetch(() => new Response("{}", { status: 200 }));
     const client = make({ mode: "offline", apiKey: "ptn_k_1", baseUrl: "http://ptn.test", fetch });
     client.loadPrompts(snapshotDocument());
-    expect(client.prompt("greeting").model).toBe("openai/gpt-4o-mini");
+    expect((await client.prompt("greeting")).model).toBe("openai/gpt-4o-mini");
     client.log({ prompt_key: "greeting", model: "m", status: "ok" });
     await client.flush(500);
     expect(fetch.calls.length).toBe(0);

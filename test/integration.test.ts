@@ -86,7 +86,7 @@ suite("live fixture server", () => {
 
   it("resolves greeting exactly as the server does for the active default prompt", async () => {
     const variables = { name: "Ada", language: "en" };
-    const local = client.prompt("greeting");
+    const local = await client.prompt("greeting");
     const remote = await serverResolve("greeting", {
       environment: "production",
       variables,
@@ -117,7 +117,7 @@ suite("live fixture server", () => {
   });
 
   it("resolves summarize exactly as the server does", async () => {
-    const local = client.prompt("summarize");
+    const local = await client.prompt("summarize");
     const remote = await serverResolve("summarize", {
       environment: "production",
       variables: { items: ["alpha", "beta", "gamma"] },
@@ -134,7 +134,7 @@ suite("live fixture server", () => {
   });
 
   it("resolves embed exactly as the server does, with no prompt at all", async () => {
-    const local = client.prompt("embed");
+    const local = await client.prompt("embed");
     const remote = await serverResolve("embed", { environment: "production" });
     expect(remote.status).toBe(200);
     const body = remote.body as ResolveResponse;
@@ -152,13 +152,13 @@ suite("live fixture server", () => {
   });
 
   it("agrees with the server on every error case", async () => {
-    expect(() => client.prompt("does_not_exist")).toThrowError(UnknownPromptError);
+    await expect(client.prompt("does_not_exist")).rejects.toThrowError(UnknownPromptError);
     const unknownPrompt = await serverResolve("does_not_exist", { environment: "production" });
     expect(unknownPrompt.status).toBe(404);
     expect(unknownPrompt.body.error.details.key).toBe("does_not_exist");
 
     try {
-      client.prompt("greeting", { template: "fr" });
+      await client.prompt("greeting", { template: "fr" });
       expect.unreachable("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(UnknownTemplateError);
@@ -173,7 +173,7 @@ suite("live fixture server", () => {
     }
 
     try {
-      client.prompt("greeting").messages({});
+      (await client.prompt("greeting")).messages({});
       expect.unreachable("should have thrown");
     } catch (error) {
       expect(error).toBeInstanceOf(MissingVariableError);
@@ -197,7 +197,7 @@ suite("live fixture server", () => {
     });
     const result = await stray.ready();
     expect(result.status).toBe("failed");
-    expect(() => stray.prompt("greeting")).toThrowError(/unreachable and nothing is cached/u);
+    await expect(stray.prompt("greeting")).rejects.toThrowError(/unreachable and nothing is cached/u);
     await stray.close(100);
   });
 
@@ -214,11 +214,11 @@ suite("live fixture server", () => {
     expect(result.status).toBe("failed");
     await bad.close(100);
 
-    expect(client.prompt("greeting").model).toBeTruthy();
+    expect((await client.prompt("greeting")).model).toBeTruthy();
   });
 
   it("sends a batch of monitoring logs and counts a resend as duplicates", async () => {
-    const prompt = client.prompt("greeting");
+    const prompt = await client.prompt("greeting");
     const ids = [uuidv7(), uuidv7()];
     const startedAt = new Date().toISOString();
 

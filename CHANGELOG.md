@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0
+
+- Changed normal config fetch to be demand-driven per prompt key. Runtime startup and idle periods
+  no longer fetch or poll PromptOn.
+- `PromptOn.prompt(key)` is now async. It fetches `GET /api/v1/prompts/:key?environment=...`
+  only when that key has no fresh cache, shares same-key concurrent fetches, and keeps prompt keys
+  cached independently.
+- Config fetches have a 10-second freshness/attempt gate, a 1-second total fetch deadline, no
+  retry, per-key ETags, and stale fallback to the last valid disk, bundle, manual, or remote value.
+
 ## 0.4.1
 
 - Fixed the release metadata and conformance README for the schema7 prompt API release. Runtime paths remain on `GET /api/v1/prompts` and `POST /api/v1/prompts/{key}/render`, with canonical `prompt_key`/`template` log fields.

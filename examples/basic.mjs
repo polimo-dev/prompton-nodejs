@@ -25,7 +25,7 @@ const prompton = new PromptOn({
 await prompton.ready();
 
 // 1. Resolve a prompt — synchronous, served from memory, never blocks on the network.
-const prompt = prompton.prompt("greeting", { template: "default" });
+const prompt = await prompton.prompt("greeting", { template: "default" });
 console.info(
   `prompt ${prompt.key} → model ${prompt.model} (revision ${prompt.deployment.revision}, from ${prompt.source})`,
 );

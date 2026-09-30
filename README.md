@@ -13,7 +13,7 @@ sees your provider key, and if it goes down your app keeps generating on the las
 received.
 
 ```
-your app ──load prompt──▶ prompt + model + params          (prompt document, cached 10 s, ETag-polled)
+your app ──load prompt──▶ prompt + model + params          (per-prompt config, demand-fetched, cached 10 s)
    │
    ├──your key, your HTTP client──▶ OpenAI / OpenRouter / Anthropic / …
    │
@@ -42,7 +42,7 @@ const { PromptOn } = require("prompton-sdk");  // CommonJS
 import { PromptOn } from "prompton-sdk";
 
 const prompton = new PromptOn();                                  // reads PTN_API_KEY, PTN_HOST
-const prompt = prompton.prompt("greeting");                     // from memory, no network call
+const prompt = await prompton.prompt("greeting");                  // fetches this prompt only when cache is missing or stale
 const messages = prompt.messages({ name: "Ada" });               // your variables, rendered locally
 const request = prompt.request({ name: "Ada" });                 // provider path + body, not sent
 
@@ -75,9 +75,9 @@ Precedence is **explicit option → environment variable → default**.
 | `baseUrl` | `PTN_HOST` | `https://app.prompton.ai` | PromptOn host; `/api/v1` is appended unless it is already there |
 | `environment` | `PTN_ENVIRONMENT` | `production` | Which environment's pins to read. It is a request parameter, never a property of the key |
 | `project` | `PTN_PROJECT` | parsed from the API key | Names the disk-cache file and guards against a prompt document from another project |
-| `cacheTtlMs` | — | `10000` | How long a prompt document is served without revalidating, and the poll interval |
-| `requestTimeoutMs` | — | `5000` | Per-request timeout |
-| `initialFetchTimeoutMs` | — | `3000` | Timeout of the first fetch, which never blocks an LLM call |
+| `cacheTtlMs` | — | `10000` | Deprecated compatibility option. Normal config fetch freshness and attempt gating are fixed at 10 seconds per prompt key |
+| `requestTimeoutMs` | — | `5000` | Per-request timeout for non-config API calls. Config fetches use a fixed 1 second total budget |
+| `initialFetchTimeoutMs` | — | `3000` | Deprecated compatibility option. Normal config fetches are demand-driven and capped at 1 second |
 | `diskCache` | `PTN_DISK_CACHE` | on, in the OS cache directory | `true`, `false`, or an explicit path. The file is written atomically with an ETag sidecar |
 | `bundlePath` | `PTN_BUNDLE` | none | A prompt document file committed into the app, used when memory and disk are empty |
 | `mode` | — | `live` | `live`, `offline` (disk and bundle only, no HTTP) or `test` (no HTTP, records captured) |
@@ -89,7 +89,7 @@ Precedence is **explicit option → environment variable → default**.
 | `log.flushBytes` | — | `1000000` | Send as soon as the queue holds this many encoded bytes |
 | `log.maxQueue` | — | `10000` | Drop the oldest record past this, and count it |
 | `log.maxAttempts` | — | `8` | Retries of one batch before it is dropped and counted |
-| `poll` | — | `true` in live mode | Revalidate in the background on a timer |
+| `poll` | — | `false` | Deprecated compatibility option. Normal runtime config fetches do not poll in the background |
 | `strictRecords` | — | `false` | Make `log()` raise on a record the server would reject, instead of dropping and counting it. For tests |
 | `flushOnExit` | — | `true` | Flush the buffer when the process is about to exit. One `beforeExit` listener is shared by every instance |
 | `fetch` | — | global `fetch` | Injected for tests |
@@ -108,32 +108,43 @@ const prompton = new PromptOn({
 
 This is the part that matters. An LLM call must never fail because PromptOn did.
 
-**One prompt document, cached, polled.** `prompt()` is synchronous and reads memory. Inside the cache TTL
-(10 s by default) it makes no HTTP call at all. Past it, the next call starts a background
-revalidation with `If-None-Match` — a `304` costs nothing — and still answers from the document it
-already holds. A refresh never blocks an LLM call and never fails one.
+**Config fetch is demand-driven per prompt key.** The SDK does not fetch remote config at startup and
+does not poll during idle periods. `await prompton.prompt("greeting")` checks the cache for
+`greeting`; if that key is fresh, it makes no HTTP call. If it is missing or older than
+the fixed 10-second config freshness window, the SDK tries exactly one
+`GET /api/v1/prompts/greeting?environment=...` request. Concurrent calls for the same prompt share
+that one request. Different prompt keys have independent cache entries, ETags and in-flight
+requests.
 
-**Three tiers, in this order.** Memory, then a disk cache, then a bundle committed into the app:
+**The same 10-second window is also the attempt gate.** A failed fetch still records an attempt, so
+the SDK will not retry that prompt key again until the TTL has elapsed. There is no config retry
+loop or background backoff timer. Each config fetch has a one-second total deadline, including the
+response body. If PromptOn cannot answer in that budget, the SDK immediately uses the last valid
+value for that prompt key, even if it is expired. With no cached value for that key, `prompt()` raises
+a clear unavailable-config error.
+
+**Three local tiers remain.** Memory, then a disk cache, then a bundle committed into the app:
 
 | Tier | When it is used | `Prompt.source` |
 |---|---|---|
-| Memory | Always, for every prompt lookup | `remote` after a successful fetch |
-| Disk | At start-up, before the first fetch returns; written atomically (temp file + rename) with an ETag sidecar | `disk` |
-| Bundle | At start-up when memory and disk are both empty. In serverless this is the primary fallback, not a nicety | `bundle` |
+| Memory | First for every prompt lookup | `remote` after a successful fetch |
+| Disk | Loaded at startup and used as fallback before a remote fetch succeeds | `disk` |
+| Bundle | Loaded when memory and disk are empty. In serverless this is the primary fallback | `bundle` |
 
 There is no fourth tier and never will be: **no database, no Redis, no shared store.** Instances
-never coordinate — ETag polling makes a private copy cheap. Several processes on one host may share
-the disk file; writes are atomic, readers tolerate a concurrent rename, and a corrupt or partial
-file is ignored rather than raised.
+never coordinate. Several processes on one host may share the disk file; writes are atomic, readers
+tolerate a concurrent rename, and a corrupt or partial file is ignored rather than raised.
 
 **A document for another environment or another project is never used.** A staging process will not
 boot on a production bundle; the file records both and a mismatch is refused with a log line.
 
-**Building a bundle.** Fetch once and write the bytes out, then commit the file:
+**Building a bundle.** Fetch once in CI or a maintenance job and write the bytes out, then commit the
+file. Normal runtime `refresh()` without a prompt key is skipped because runtime config fetch is
+per-key.
 
 ```ts
 const prompton = new PromptOn();
-await prompton.refresh();
+await prompton.refresh({ prompt: "greeting" });
 prompton.exportPrompts("prompton/prompts.production.json");
 ```
 
@@ -145,12 +156,13 @@ environment guard in whichever environment it was not exported from.
 
 | What happened | What the SDK does | What your app sees |
 |---|---|---|
-| Inside the cache TTL | Serves memory | Nothing; no HTTP call is made |
-| `304 Not Modified` | Keeps the document, clears the stale flag | Nothing |
-| `429` with `Retry-After` | Waits it out before contacting the server again, keeps serving | Nothing. `promptsInfo().stale` turns `true` |
-| `5xx`, timeout, DNS failure, connection refused | Backs off ×2 from the cache TTL up to 5 minutes, keeps serving | Nothing |
-| A prompt document for the wrong environment or project | Refuses it, keeps polling | Nothing, plus one warning line |
-| PromptOn unreachable **and** nothing cached anywhere | — | `NotReadyError`: "PromptOn is unreachable and nothing is cached" |
+| Prompt key cache is fresh | Serves memory | Nothing; no HTTP call is made |
+| Prompt key cache is stale or missing | Tries one `GET /prompts/:key` with `If-None-Match` when available | The resolved prompt, after the fetch or fallback |
+| Same prompt requested concurrently | Shares the in-flight fetch | All callers get the same resolved prompt |
+| `304 Not Modified` | Keeps that prompt key's document and clears the stale flag | Nothing |
+| Fetch misses the one-second deadline, returns `429`/`5xx`, or the network fails | Marks that prompt key stale and gates further attempts for 10 seconds | The last valid value for that prompt key |
+| Fetch fails and no value exists for that prompt key | — | `NotReadyError`: "PromptOn is unreachable and nothing is cached" |
+| A prompt document for the wrong environment or project | Refuses it | The previous value for that prompt key, or the unavailable-config error above |
 | Prompt key not in the prompt document | — | `UnknownPromptError` |
 | Prompt key has no live deployment here | — | `UnresolvedError`. Fix the deployment; **never** fall back to a hard-coded prompt |
 | Template is not pinned | — | `UnknownTemplateError`, carrying `templateNames`. There is no silent fallback to `default` |
@@ -158,18 +170,11 @@ environment guard in whichever environment it was not exported from.
 | Monitoring logs get `429` or any `5xx` | Retries the same batch with the same ids, honouring `Retry-After`, then backing off ×2 from 1 s to 5 min | Nothing |
 | Monitoring logs get `413` | Splits the batch in half and resends both halves | Nothing |
 | Monitoring logs get any other `4xx` | Drops the batch, counts it, logs once. Retrying a rejected batch only loses the ones behind it | Nothing |
-| The log queue is full | Drops the oldest and counts it | Nothing |
-| `log()` is handed a record with a field missing | Drops it, counts it in `droppedInvalid`, warns once | Nothing — unless `strictRecords` is on, which raises `InvalidRecordError` |
-| The record builder throws inside `Prompt.track()` | Drops the record and counts it | Nothing; your own return value or your own exception, untouched |
-| The render endpoint gets `429` or `5xx` | Serves the cached answer and stops calling until `Retry-After`, else backs off ×2 from the cache TTL to 5 min | Nothing, if that key was ever answered; otherwise the original `ApiError` |
-
-Prove it before you ship: run your app with a wrong `PTN_HOST` and confirm that LLM calls still
-happen on the cached prompt document.
 
 ## Prompts
 
 ```ts
-const prompt = prompton.prompt("diary_prompt_key");
+const prompt = await prompton.prompt("diary_prompt_key");
 ```
 
 `params = prompt.default_params <- deployment.params` and
@@ -192,7 +197,7 @@ Rendering is per call:
 ```ts
 const messages = prompt.messages({ transcriptions, mode: "fresh", language: "en" });
 const korean = prompt.messages({ transcriptions, mode: "fresh", language: "ko" });
-const text = prompton.prompt("summarize").text({ items });
+const text = await prompton.prompt("summarize").text({ items });
 const request = prompt.request({ transcriptions, mode: "fresh", language: "en" });
 ```
 
@@ -316,7 +321,7 @@ splitting a multi-byte character. Sampling is a pure function of the record id, 
 const prompton = new PromptOn({ mode: "test" });
 prompton.loadPrompts(require("./fixtures/prompts.json"));
 
-const prompt = prompton.prompt("greeting");
+const prompt = await prompton.prompt("greeting");
 await prompt.track(() => ({ content: "hi", finishReason: "stop" }));
 
 expect(prompton.logs[0].stop_kind).toBe("stop");   // captured, never sent
@@ -330,8 +335,8 @@ local development, and for proving the fallback path works.
 ```ts
 prompton.promptsInfo();   // { etag, source, environment, project, fetchedAt, stale, ageSeconds }
 prompton.stats();          // buffer counters: queued, sent, accepted, duplicates, dropped*
-await prompton.refresh();  // fetch once, now
-await prompton.close();    // stop the timers and flush what is queued
+await prompton.refresh({ prompt: "greeting" });  // fetch one key now, subject to the 10 s attempt gate
+await prompton.close();    // flush what is queued
 ```
 
 There is no global singleton: create an instance, hold it, and pass it around. Timers are `unref`'d,
