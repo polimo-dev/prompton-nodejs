@@ -6,8 +6,16 @@
     "greeting": {
       "id": "01a069cb-07cb-74c2-87dc-10a06efdc4fb",
       "kind": "chat",
-      "input_schema": [{ "name": "name", "type": "string", "required": true }],
-      "default_params": { "max_tokens": 256 },
+      "input_schema": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "default_params": {
+        "max_tokens": 256
+      },
       "payload_policy": {
         "mode": "full",
         "sample_rate": 1.0,
@@ -24,7 +32,9 @@
       "model_id": "01a069cb-07c2-7e11-9011-85af7e778f96",
       "api": "chat_completions",
       "request_path": "/api/v1/chat/completions",
-      "params": { "temperature": 0.2 },
+      "params": {
+        "temperature": 0.2
+      },
       "provider_options": {},
       "template_pins": {
         "default": "01a069cb-07f1-7c90-b3a6-cdf8d2d7ed48",
@@ -40,8 +50,10 @@
       "kind": "chat",
       "engine": "liquid",
       "messages": [
-        { "role": "system", "content": "You are a friendly greeter. Answer in one short line." },
-        { "role": "user", "content": "Say hello to {{ name }}." }
+        {
+          "role": "system",
+          "content": "You are a friendly greeter. Answer in one short line. Visitor: {{ name }}."
+        }
       ],
       "text_template": null
     },
@@ -52,8 +64,10 @@
       "kind": "chat",
       "engine": "liquid",
       "messages": [
-        { "role": "system", "content": "너는 친절한 인사 도우미다. 한 줄로 답한다." },
-        { "role": "user", "content": "{{ name }}님에게 인사해줘." }
+        {
+          "role": "system",
+          "content": "너는 친절한 인사 도우미다. 한 줄로 답한다. Visitor: {{ name }}."
+        }
       ],
       "text_template": null
     }
@@ -65,8 +79,15 @@
       "model_id": "openai/gpt-4o-mini",
       "display_name": "GPT-4o mini",
       "metadata": {},
-      "provider_options": { "only": ["OpenAI"] },
-      "capabilities": ["tools", "streaming"],
+      "provider_options": {
+        "only": [
+          "OpenAI"
+        ]
+      },
+      "capabilities": [
+        "tools",
+        "streaming"
+      ],
       "status": "active"
     }
   }

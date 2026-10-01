@@ -13,6 +13,40 @@ import {
 /** Behaviour beyond the conformance cases, and the parts a Node app is most likely to hit. */
 
 describe("render", () => {
+  it.each(["liquid", "raw"] as const)("rejects retired message slots in the %s engine", (engine) => {
+    for (const message of [
+      { type: "slot", name: "history" },
+      { type: "slot" },
+      { type: "slot", role: "system", content: "forged native message" },
+    ]) {
+      for (const variables of [{}, { history: [{ role: "user", content: "prior" }] }]) {
+        expect(() => renderMessages([message], variables, engine)).toThrowError(
+          "Message slots are not supported; compose conversation history in app code.",
+        );
+      }
+    }
+  });
+
+  it("treats history as an ordinary template variable", () => {
+    expect(renderMessages([{ role: "system", content: "Context: {{ history }}" }], { history: "a summary" }))
+      .toEqual([{ role: "system", content: "Context: a summary" }]);
+    expect(renderMessages([{ role: "system", content: "{{ history | join: ', ' }}" }], { history: ["one", "two"] }))
+      .toEqual([{ role: "system", content: "one, two" }]);
+  });
+
+  it("preserves native message fields and absent content without mutating templates", () => {
+    const messages = [
+      { role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: "{{ history }}" } }] },
+      { role: "tool", content: [], tool_call_id: "call_1", name: "lookup", vendor: { trace: null } },
+      { role: "user", content: [{ type: "text", text: "{{ history }}" }] },
+      { role: "assistant", type: "native", name: "helper", reasoning: "opaque" },
+    ];
+    const rendered = renderMessages(messages, { history: "value" });
+    expect(rendered).toEqual(messages);
+    expect(rendered[3]).not.toHaveProperty("content");
+    expect(rendered[0]).not.toBe(messages[0]);
+  });
+
   it("returns the source verbatim under the raw engine", () => {
     const source = "{% include \"x\" %} {{ a";
     expect(render(source, { a: 1 }, "raw")).toBe(source);

@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
-import { PreparedRequestError, PromptOn, Result } from "../src/index.js";
+import { PreparedRequestError, PromptOn, Result, TemplateRenderError } from "../src/index.js";
 import { fakeFetch, snapshotDocument, snapshotResponse } from "./helpers.js";
 
 const clients: PromptOn[] = [];
@@ -96,23 +96,39 @@ it("legacy v5 ignores injected request metadata and v6 requires the immutable ve
   expect(() => broken.request({ name: "Ada" })).toThrow(PreparedRequestError);
 });
 
-it("matches the preview HTTP render provider request for native tool history", async () => {
+it("composes app history and current input while retaining prepared options and logging final messages", async () => {
   const fixture = JSON.parse(readFileSync(new URL("./conformance/http_contract.json", import.meta.url), "utf8"));
   const client = loaded(fixture.snapshot);
-  const request = (await client.prompt(fixture.render.key)).request({
-    locale: "ko-KR",
-    topic: "park walks",
-    history: fixture.render.request.body.messages.slice(1, 4),
-  });
+  const prompt = await client.prompt(fixture.render.key);
+  const variables = { locale: "ko-KR", topic: "park walks" };
+  const request = prompt.request(variables);
 
   expect(request).toEqual(fixture.render.request);
-  const body = request.body as any;
-  expect(body.messages[2].tool_calls[0].id).toBe("call_prior_1");
-  expect(body.messages[3].tool_call_id).toBe("call_prior_1");
-  expect(body.messages[5].tool_calls[0].id).toBe("call_history_1");
-  expect(body.messages[6].tool_call_id).toBe("call_history_1");
+  const managedMessages = prompt.messages(variables);
+  const messages = [...managedMessages, ...fixture.application.conversation_history, fixture.application.current_user_message];
+  const body = { ...request.body, messages } as any;
+  expect(body.messages[2].tool_calls[0].id).toBe("call_history_1");
+  expect(body.messages[3].tool_call_id).toBe("call_history_1");
+  expect(body.messages[6].tool_calls[0].id).toBe("call_prior_1");
+  expect(body.messages[7].tool_call_id).toBe("call_prior_1");
+  expect(body.messages.at(-1)).toEqual(fixture.application.current_user_message);
+  expect(request.body.messages).toEqual(managedMessages);
+  expect({ ...body, messages: managedMessages }).toEqual(request.body);
   expect(body.tools[0].function.output_schema).toBeUndefined();
   expect(body.tools[0].output_schema).toBeUndefined();
+  await prompt.track(() => ({ content: "Summary", finishReason: "stop" }), { variables, inputMessages: messages });
+  expect(client.logs[0]?.input).toEqual({ variables, messages });
+});
+
+it.each(["liquid", "raw"])("rejects retired slots from cached %s prompt documents at both public render boundaries", async (engine) => {
+  const doc = snapshotDocument();
+  const id = (doc.deployments as any).greeting.template_pins.default;
+  (doc.prompt_versions as any)[id].engine = engine;
+  (doc.prompt_versions as any)[id].messages = [{ type: "slot", name: "history", role: "system" }];
+  const prompt = await loaded(doc).prompt("greeting");
+  const variables = { history: [{ role: "user", content: "prior" }] };
+  expect(() => prompt.messages(variables)).toThrowError(TemplateRenderError);
+  expect(() => prompt.request(variables)).toThrowError("compose conversation history in app code");
 });
 
 it("remote Decision rendering and its cache retain native content and the prepared POST request", async () => {

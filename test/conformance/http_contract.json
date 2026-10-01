@@ -14,35 +14,6 @@
         "role": "system"
       },
       {
-        "content": "지난 산책 일기를 찾아줘",
-        "role": "user"
-      },
-      {
-        "content": null,
-        "role": "assistant",
-        "tool_calls": [
-          {
-            "function": {
-              "arguments": "{\"query\":\"park walks\",\"limit\":1}",
-              "name": "search_diaries"
-            },
-            "id": "call_prior_1",
-            "type": "function"
-          }
-        ]
-      },
-      {
-        "content": [
-          {
-            "text": "{\"entries\":[\"A prior park walk.\"]}",
-            "type": "text"
-          }
-        ],
-        "name": "search_diaries",
-        "role": "tool",
-        "tool_call_id": "call_prior_1"
-      },
-      {
         "content": "Find diary history about park walks.",
         "role": "user"
       },
@@ -102,35 +73,6 @@
           {
             "content": "You answer from diary history when useful. Locale: ko-KR.",
             "role": "system"
-          },
-          {
-            "content": "지난 산책 일기를 찾아줘",
-            "role": "user"
-          },
-          {
-            "content": null,
-            "role": "assistant",
-            "tool_calls": [
-              {
-                "function": {
-                  "arguments": "{\"query\":\"park walks\",\"limit\":1}",
-                  "name": "search_diaries"
-                },
-                "id": "call_prior_1",
-                "type": "function"
-              }
-            ]
-          },
-          {
-            "content": [
-              {
-                "text": "{\"entries\":[\"A prior park walk.\"]}",
-                "type": "text"
-              }
-            ],
-            "name": "search_diaries",
-            "role": "tool",
-            "tool_call_id": "call_prior_1"
           },
           {
             "content": "Find diary history about park walks.",
@@ -271,10 +213,6 @@
             "role": "system"
           },
           {
-            "name": "history",
-            "type": "slot"
-          },
-          {
             "content": "Find diary history about {{ topic }}.",
             "role": "user"
           },
@@ -370,11 +308,6 @@
         "id": "01a0e6e7-64b3-7de0-b2f5-faeecbc9db0c",
         "input_schema": [
           {
-            "name": "history",
-            "required": false,
-            "type": "list"
-          },
-          {
             "name": "topic",
             "required": true,
             "type": "string"
@@ -396,5 +329,43 @@
       }
     },
     "schema_version": 7
-  }
+  },
+  "application": {
+    "conversation_history": [
+      {
+        "content": "지난 산책 일기를 찾아줘",
+        "role": "user"
+      },
+      {
+        "content": null,
+        "role": "assistant",
+        "tool_calls": [
+          {
+            "function": {
+              "arguments": "{\"query\":\"park walks\",\"limit\":1}",
+              "name": "search_diaries"
+            },
+            "id": "call_prior_1",
+            "type": "function"
+          }
+        ]
+      },
+      {
+        "content": [
+          {
+            "text": "{\"entries\":[\"A prior park walk.\"]}",
+            "type": "text"
+          }
+        ],
+        "name": "search_diaries",
+        "role": "tool",
+        "tool_call_id": "call_prior_1"
+      }
+    ],
+    "current_user_message": {
+      "role": "user",
+      "content": "Summarize the park walks."
+    }
+  },
+  "fixture_note": "Adapted from the historical schema7 HTTP capture for authored messages only; application history and current input are composed separately. Not a new live capture."
 }

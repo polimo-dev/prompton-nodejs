@@ -1,7 +1,7 @@
 import type { Engine, Message } from "./template.js";
 
 /**
- * Decoding of the `GET /prompts` body. Schema v7 adds canonical tool definitions and native message slots while schema v5/v6
+ * Decoding of the `GET /prompts` body. Schema v7 adds canonical tool definitions and native messages while schema v5/v6
  * remain readable for existing bundles and disk caches.
  */
 

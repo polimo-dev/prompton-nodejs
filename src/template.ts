@@ -68,9 +68,9 @@ export function render(source: string, variables: Variables, engine: Engine = "l
 }
 
 /**
- * Renders chat messages. A `{type: "slot", name: "history"}` message splices a variable list of
- * full provider-native chat messages verbatim. Static messages render string `content` only and
- * preserve null, array content, tool_calls, tool_call_id and unknown provider fields.
+ * Renders authored chat messages. String `content` is rendered; null, array content,
+ * tool_calls, tool_call_id and unknown provider fields are preserved. The app appends
+ * conversation history and the current user message when it calls the provider.
  */
 export function renderMessages(
   messages: readonly Message[],
@@ -81,26 +81,13 @@ export function renderMessages(
   const out: Message[] = [];
   for (const message of messages) {
     if (message.type === "slot") {
-      const name = typeof message.name === "string" ? message.name : "";
-      if (!Object.hasOwn(vars, name)) throw new MissingVariableError(name);
-      const value = vars[name];
-      if (!Array.isArray(value)) throw new TemplateRenderError(`message slot ${name} must be a list`);
-      for (const entry of value) {
-        if (!isRecord(entry)) throw new TemplateRenderError(`message slot ${name} must contain objects`);
-        out.push({ ...entry });
-      }
-    } else {
-      out.push({
-        ...message,
-        content: typeof message.content === "string" ? render(message.content, vars, engine) : message.content,
-      });
+      throw new TemplateRenderError("Message slots are not supported; compose conversation history in app code.");
     }
+    const rendered = { ...message };
+    if (typeof message.content === "string") rendered.content = render(message.content, vars, engine);
+    out.push(rendered);
   }
   return out;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

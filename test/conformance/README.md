@@ -6,7 +6,10 @@ reproduces the expected values byte for byte. When two SDKs disagree about how a
 which model a prompt document selects, or how a monitoring log is truncated, an app that talks to
 PromptOn from two languages gets two different answers. That is what these files prevent.
 
-Nothing here is hand-written. `scripts/gen_conformance.exs` in this repository executes the Elixir
+`http_contract.json` is a historical schema7 HTTP capture adapted for authored messages only.
+Its `application` section holds app-owned conversation messages; it is not a fresh live capture.
+
+The generated cross-language files are not hand-written. `scripts/gen_conformance.exs` in this repository executes the Elixir
 SDK and writes down what it actually produced:
 
 ```

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Removed message-slot expansion. Retired `type: "slot"` entries now fail with guidance to compose
+  conversation history in app code. Ordinary template variables named `history` remain supported.
+- Chat examples explicitly combine authored messages, app history, and current input while
+  retaining prepared request options and logging the final message list. Native fields remain intact.
+
 ## 0.5.0
 
 - Changed normal config fetch to be demand-driven per prompt key. Runtime startup and idle periods

@@ -24,7 +24,7 @@ const prompton = new PromptOn({
 // Optional: a short-lived script wants the first fetch before it resolves.
 await prompton.ready();
 
-// 1. Resolve a prompt — synchronous, served from memory, never blocks on the network.
+// 1. Resolve a prompt from its configured cache or fetch it on demand.
 const prompt = await prompton.prompt("greeting", { template: "default" });
 console.info(
   `prompt ${prompt.key} → model ${prompt.model} (revision ${prompt.deployment.revision}, from ${prompt.source})`,
@@ -32,9 +32,16 @@ console.info(
 
 // 2. Render this call's variables into the pinned prompt.
 const variables = { name: "Ada" };
-const messages = prompt.messages(variables);
+const managedMessages = prompt.messages(variables);
+const prepared = prompt.request(variables);
+const conversationHistory = [
+  { role: "user", content: "Hello!" },
+  { role: "assistant", content: "Hi, how can I help?" },
+];
+const currentUserMessage = { role: "user", content: "Introduce yourself." };
+const messages = [...managedMessages, ...conversationHistory, currentUserMessage];
+const request = { ...prepared, body: { ...prepared.body, messages } };
 console.info("messages:", JSON.stringify(messages, null, 2));
-const request = prompt.request(variables);
 console.info("provider request:", JSON.stringify(request, null, 2));
 
 // 3. Call the provider yourself, with your own key and your own HTTP client. PromptOn is never in

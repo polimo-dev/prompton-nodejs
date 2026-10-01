@@ -39,22 +39,38 @@ const { PromptOn } = require("prompton-sdk");  // CommonJS
 ## Quick start
 
 ```ts
-import { PromptOn } from "prompton-sdk";
+import { PromptOn, Result } from "prompton-sdk";
 
 const prompton = new PromptOn();                                  // reads PTN_API_KEY, PTN_HOST
 const prompt = await prompton.prompt("greeting");                  // fetches this prompt only when cache is missing or stale
-const messages = prompt.messages({ name: "Ada" });               // your variables, rendered locally
-const request = prompt.request({ name: "Ada" });                 // provider path + body, not sent
+const variables = { name: "Ada" };
+const managedMessages = prompt.messages(variables);              // messages authored in the editor
+const prepared = prompt.request(variables);                     // pinned model, options and provider path
+const conversationHistory = [                                  // loaded by your app
+  { role: "user", content: "Hello!" },
+  { role: "assistant", content: "Hi, how can I help?" },
+];
+const currentUserMessage = { role: "user", content: "Introduce yourself." };
+const messages = [...managedMessages, ...conversationHistory, currentUserMessage];
+const body = { ...prepared.body, messages };                      // retain params, tools and provider options
 
-const answer = await prompt.track(() =>
-  fetch(`https://openrouter.ai${request.path}`, {
-    method: request.method,
+const answer = await prompt.track(async () => {
+  const response = await fetch(`https://openrouter.ai${prepared.path}`, {
+    method: prepared.method,
     headers: { authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`, "content-type": "application/json" },
-    body: JSON.stringify(request.body),
-  }),
-  { variables: { name: "Ada" }, inputMessages: messages },
-);
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(`Provider returned ${response.status}`);
+  return response.json();
+}, { variables, inputMessages: messages }, Result.fromOpenAI);
 ```
+
+For a Chat prompt, `messages()` returns only the messages authored in PromptOn. Your app owns
+conversation storage, message order, tool results, and the current user input. Pass the final
+provider messages as `inputMessages` so monitoring records the request you actually sent.
+There is no reserved history variable or message-slot syntax. `{{ history }}` is an ordinary
+template variable when your authored text references it. Retired `type: "slot"` entries fail with
+an error directing you to compose the conversation in app code.
 
 `Prompt.track()` times the call, builds the monitoring log and queues it. Whatever your function
 returns comes back unchanged; whatever it throws is logged as an error record and rethrown.
