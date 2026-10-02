@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Omit the known closed Req transport generation errors and matching error completion events
+  before submission, preserving callback errors, application retries, and unrelated monitoring.
 - Removed message-slot expansion. Retired `type: "slot"` entries now fail with guidance to compose
   conversation history in app code. Ordinary template variables named `history` remain supported.
 - Chat examples explicitly combine authored messages, app history, and current input while

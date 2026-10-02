@@ -701,7 +701,8 @@ export class PromptOn {
    * events they observed in their own app. In test mode the events are captured without HTTP.
    */
   async logEvents(events: readonly TraceEvent[]): Promise<TraceEventResult> {
-    const prepared = prepareTraceEvents(events);
+    const prepared = prepareTraceEvents(events).filter((event) => !isClosedTransportCompletion(event));
+    if (prepared.length === 0) return { accepted: 0, duplicates: 0, rejected: [] };
     if (this.config.mode === "test") {
       this.capturedEvents.push(...prepared);
       return { accepted: prepared.length, duplicates: 0, rejected: [] };
@@ -808,6 +809,10 @@ export class PromptOn {
   }
 
   private enqueue(record: LogRecord, policy: PayloadPolicy | null): void {
+    const error = asRecord(record["error"]);
+    if (record["status"] === "error" && error["kind"] === "transport" && isClosedTransportMessage(error["message"])) {
+      return;
+    }
     const final = applyPayloadPolicy(record, policy, {
       payloadDefaults: this.config.payloadDefaults,
       hashEndUser: this.config.hashEndUser,
@@ -859,6 +864,17 @@ export class PromptOn {
     }
     return { kind: "drop", reason: `HTTP ${String(response.status)}: ${errorMessage(response)}` };
   }
+}
+
+function isClosedTransportMessage(message: unknown): boolean {
+  return message === "%Req.TransportError{reason: :closed}"
+    || message === "failed to send request: %Req.TransportError{reason: :closed}";
+}
+
+function isClosedTransportCompletion(event: TraceEvent): boolean {
+  return event["event_kind"] === "completion" && event["status"] === "error"
+    && (isClosedTransportMessage(event["completion_output"])
+      || event["completion_output"] === "failed to call LLM: failed to send request: %Req.TransportError{reason: :closed}");
 }
 
 function prepareTraceEvents(events: readonly TraceEvent[]): TraceEvent[] {

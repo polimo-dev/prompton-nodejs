@@ -268,6 +268,19 @@ touching the network.
 
 ## Monitoring logs
 
+Closed Req transport failures are omitted from monitoring submissions when a generation record has
+`status: "error"`, `error.kind: "transport"`, and an error message exactly equal to
+`%Req.TransportError{reason: :closed}` or `failed to send request: %Req.TransportError{reason: :closed}`.
+Filtering runs before payload policy/redaction. `track()` still rethrows the same error so the app
+can retry; other errors and successful retries are recorded normally. This rule also applies when
+the app has exhausted its retries.
+
+`logEvents()` omits error completion events with either message as `completion_output`, also accepting
+`failed to call LLM: failed to send request: %Req.TransportError{reason: :closed}`. Existing validation
+still runs first; remaining events retain their IDs/order. An entirely filtered batch returns
+`{accepted: 0, duplicates: 0, rejected: []}` without HTTP. This is an exact message rule shared with
+the Elixir SDK; it does not broadly suppress native socket exceptions or retry provider calls.
+
 Three ways in.
 
 ```ts
