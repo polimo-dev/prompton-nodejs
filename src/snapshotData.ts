@@ -148,7 +148,7 @@ export function decodePromptDocument(input: unknown): DecodeResult {
 
   if (!isRecord(normalized["prompts"])) throw new Error("prompt document prompts is required");
 
-  const deployments = decodeDeployments(normalized["deployments"], rawVersion, warnings);
+  const deployments = decodeDeployments(normalized["deployments"], warnings);
   const prompts = decodePrompts(normalized["prompts"], deployments, warnings);
 
   return {
@@ -160,12 +160,12 @@ export function decodePromptDocument(input: unknown): DecodeResult {
       deployments,
       promptVersions: decodeById(
         normalized["prompt_versions"],
-        (entry, fallbackId) => decodePromptVersion(entry, fallbackId, rawVersion, warnings),
+        (entry, fallbackId) => decodePromptVersion(entry, fallbackId, warnings),
         warnings,
       ),
       models: decodeById(
         normalized["models"],
-        (entry, fallbackId) => decodeModel(entry, fallbackId, rawVersion, warnings),
+        (entry, fallbackId) => decodeModel(entry, fallbackId, warnings),
         warnings,
       ),
     },
@@ -237,7 +237,7 @@ function decodePrompts(
     const kind = asString(value["kind"]) ?? "chat";
     if (!KINDS.has(kind)) warnings.push({ kind: "unknown_kind", detail: kind });
     prompts[key] = {
-      id: asString(value["id"]),
+      id: null,
       key,
       kind,
       variables: decodeVariables(value, warnings),
@@ -293,7 +293,6 @@ function decodePayloadPolicy(raw: unknown, warnings: DecodeWarning[]): PayloadPo
 
 function decodeDeployments(
   raw: unknown,
-  _schemaVersion: number,
   warnings: DecodeWarning[],
 ): Record<string, PromptDeployment> {
   const deployments: Record<string, PromptDeployment> = {};
@@ -308,23 +307,25 @@ function decodeDeployments(
       continue;
     }
     const pins: Record<string, string> = {};
-    const number = strictPositiveInteger(value["prompt_version"]);
-    if (number !== null) {
-      pins["default"] = `${key}@${String(number)}`;
-    } else if (isRecord(value["template_pins"])) {
-      for (const [name, versionId] of Object.entries(value["template_pins"])) {
-        const id = asString(versionId);
-        if (id === null) warnings.push({ kind: "invalid_prompt_pin", detail: `${key}.${name}` });
-        else pins[name] = id;
+    const rawPromptPins = value["prompt_pins"];
+    if (isRecord(rawPromptPins)) {
+      for (const [name, rawNumber] of Object.entries(rawPromptPins)) {
+        const pinNumber = strictPositiveInteger(rawNumber);
+        if (pinNumber === null) warnings.push({ kind: "invalid_prompt_pin", detail: `${key}.${name}` });
+        else pins[name] = `${key}@${String(pinNumber)}`;
       }
-    } else if (value["prompt_version"] !== null && value["prompt_version"] !== undefined) {
-      warnings.push({ kind: "invalid_prompt_pin", detail: `${key}.default` });
+    } else {
+      const number = strictPositiveInteger(value["prompt_version"]);
+      if (number !== null) {
+        pins["default"] = `${key}@${String(number)}`;
+      } else if (value["prompt_version"] !== null && value["prompt_version"] !== undefined) {
+        warnings.push({ kind: "invalid_prompt_pin", detail: `${key}.default` });
+      }
     }
-    const readableModelId = modelKey(value["provider"], value["model"]);
-    const deploymentModelId = readableModelId ?? asString(value["model_id"]);
+    const deploymentModelId = modelKey(value["provider"], value["model"]);
     if (deploymentModelId === null) warnings.push({ kind: "invalid_model_ref", detail: key });
     deployments[key] = {
-      id: readableModelId !== null ? null : asString(value["id"]),
+      id: null,
       promptKey: asString(value["prompt_key"]) ?? key,
       revision: asRevision(value["revision"], key),
       modelId: deploymentModelId ?? `invalid:${key}`,
@@ -352,19 +353,6 @@ function decodeById<T extends { id: string | null; lookupKey?: string | null }>(
     out[key] = decoded;
   };
   if (raw === null || raw === undefined) return out;
-  if (Array.isArray(raw)) {
-    for (const entry of raw) {
-      if (!isRecord(entry)) {
-        warnings.push({ kind: "invalid_entry", detail: entry });
-        continue;
-      }
-      const fallbackId = asString(entry["id"]) ?? "";
-      const decoded = decode(entry, fallbackId);
-      if (decoded === null) continue;
-      insert(decoded.id ?? decoded.lookupKey ?? fallbackId, decoded);
-    }
-    return out;
-  }
   if (!isRecord(raw)) {
     warnings.push({ kind: "invalid_collection", detail: raw });
     return out;
@@ -384,7 +372,6 @@ function decodeById<T extends { id: string | null; lookupKey?: string | null }>(
 function decodePromptVersion(
   raw: Record<string, unknown>,
   fallbackId: string,
-  _schemaVersion: number,
   warnings: DecodeWarning[],
 ): PromptVersion | null {
   const engine = asString(raw["engine"]) ?? "liquid";
@@ -400,12 +387,15 @@ function decodePromptVersion(
     warnings.push({ kind: "invalid_prompt_version", detail: fallbackId });
     return null;
   }
-  const key = readableKey ?? fallbackId;
+  if (readableKey === null) {
+    warnings.push({ kind: "invalid_prompt_version", detail: fallbackId });
+    return null;
+  }
   return {
-    id: readableKey !== null ? null : (asString(raw["id"]) ?? fallbackId),
-    lookupKey: key,
-    promptTemplateId: promptKey ?? asString(raw["prompt_template_id"]),
-    number: number ?? asInteger(raw["number"]),
+    id: null,
+    lookupKey: readableKey,
+    promptTemplateId: promptKey,
+    number,
     kind,
     engine: (ENGINES.has(engine) ? engine : "liquid") as Engine,
     messages: decodeMessages(raw["messages"]),
@@ -450,22 +440,21 @@ function decodeTools(raw: unknown): ToolDefinitions | null {
 function decodeModel(
   raw: Record<string, unknown>,
   fallbackId: string,
-  _schemaVersion: number,
   warnings: DecodeWarning[],
 ): PromptModel | null {
   const capabilities = Array.isArray(raw["capabilities"])
     ? raw["capabilities"].map((value) => asString(value)).filter((value): value is string => value !== null)
     : [];
   const provider = strictString(raw["provider"]);
-  const model = strictString(raw["model"]) ?? asString(raw["model_id"]);
-  const readableKey = provider !== null && strictString(raw["model"]) !== null ? `${provider}:${String(raw["model"])}` : null;
-  if (readableKey !== null && readableKey !== fallbackId) {
+  const model = strictString(raw["model"]);
+  const readableKey = provider !== null && model !== null ? `${provider}:${model}` : null;
+  if (readableKey === null || readableKey !== fallbackId) {
     warnings.push({ kind: "invalid_entry", detail: fallbackId });
     return null;
   }
   return {
-    id: readableKey !== null ? null : (asString(raw["id"]) ?? fallbackId),
-    lookupKey: readableKey ?? fallbackId,
+    id: null,
+    lookupKey: readableKey,
     provider,
     modelId: model,
     displayName: asString(raw["display_name"]),

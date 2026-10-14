@@ -252,7 +252,7 @@ function resolveExpectation(
     params: resolution.params,
     provider_options: resolution.providerOptions,
     prompt_version:
-      resolution.promptVersionId === null
+      resolution.promptVersionId === null && resolution.promptVersionNumber === null
         ? null
         : { id: resolution.promptVersionId, number: resolution.promptVersionNumber },
     warnings: resolution.warnings.map((w: { kind: string; detail: unknown }) => `${w.kind}: ${String(w.detail)}`),

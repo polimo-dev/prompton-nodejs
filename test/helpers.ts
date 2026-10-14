@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import type { Logger } from "../src/index.js";
 
 /** A snapshot document in the shape `GET /prompts` returns, small enough to read in a test. */
-export function snapshotDocument(
+function legacySnapshotDocument(
   environment = "production",
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
@@ -201,12 +201,19 @@ export function snapshotDocument(
   };
 }
 
+export function snapshotDocument(
+  environment = "production",
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return readableSnapshotDocument(environment, overrides);
+}
+
 /** The schema v1 aggregate wire shape: readable resource references, no public resource UUIDs. */
 export function readableSnapshotDocument(
   environment = "production",
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  const legacy = snapshotDocument(environment);
+  const legacy = legacySnapshotDocument(environment);
   const legacyModels = legacy.models as Record<string, Record<string, unknown>>;
   const legacyVersions = legacy.prompt_versions as Record<string, Record<string, unknown>>;
   const deployments: Record<string, Record<string, unknown>> = {};
@@ -217,30 +224,38 @@ export function readableSnapshotDocument(
     const model = legacyModels[String(deployment["model_id"])]!;
     const provider = String(model["provider"]);
     const modelName = String(model["model_id"]);
-    const defaultVersionId = ((deployment["template_pins"] as Record<string, unknown> | undefined) ?? {})["default"];
-    const version = legacyVersions[String(defaultVersionId)];
+    const rawPins = (deployment["template_pins"] as Record<string, unknown> | undefined) ?? {};
+    const promptPins: Record<string, number> = {};
+    for (const [name, versionId] of Object.entries(rawPins)) {
+      const pinnedVersion = legacyVersions[String(versionId)];
+      if (typeof pinnedVersion?.["number"] === "number") promptPins[name] = pinnedVersion["number"];
+    }
     deployments[key] = {
       revision: deployment["revision"],
       provider,
       model: modelName,
-      prompt_version: typeof version?.["number"] === "number" ? version["number"] : undefined,
+      prompt_version: promptPins["default"],
+      prompt_pins: promptPins,
       api: deployment["api"],
       request_path: deployment["request_path"],
       params: deployment["params"],
       provider_options: deployment["provider_options"],
     };
-    if (version) {
-      const number = Number(version["number"]);
-      promptVersions[`${key}@${String(number)}`] = {
-        prompt: key,
-        number,
-        kind: version["kind"],
-        engine: version["engine"],
-        messages: version["messages"],
-        text_template: version["text_template"],
-        decision: version["decision"],
-        tools: version["tools"],
-      };
+    for (const versionId of Object.values(rawPins)) {
+      const version = legacyVersions[String(versionId)];
+      if (version) {
+        const number = Number(version["number"]);
+        promptVersions[`${key}@${String(number)}`] = {
+          prompt: key,
+          number,
+          kind: version["kind"],
+          engine: version["engine"],
+          messages: version["messages"],
+          text_template: version["text_template"],
+          decision: version["decision"],
+          tools: version["tools"],
+        };
+      }
     }
   }
 

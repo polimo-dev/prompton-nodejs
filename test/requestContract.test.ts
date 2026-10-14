@@ -67,14 +67,24 @@ it("does not send OpenRouter routing options to native OpenAI", async () => {
   const doc = snapshotDocument();
   const deployment = (doc["deployments"] as any)["greeting"];
   deployment["request_path"] = "/v1/chat/completions";
-  (doc["models"] as any)[deployment["model_id"]]["provider"] = "openai";
+  delete (doc["models"] as any)["openrouter:openai/gpt-4o-mini"];
+  deployment["provider"] = "openai";
+  (doc["models"] as any)["openai:openai/gpt-4o-mini"] = {
+    provider: "openai",
+    model: "openai/gpt-4o-mini",
+    display_name: "GPT-4o mini",
+    metadata: {},
+    provider_options: { only: ["OpenAI"] },
+    capabilities: [],
+    status: "active",
+  };
   const prompt = await loaded(doc).prompt("greeting");
   expect(() => prompt.request({ name: "Ada" })).toThrow(PreparedRequestError);
 });
 
 it("preserves __proto__ as a question name and keeps keys literal", async () => {
   const doc = snapshotDocument();
-  const versionId = (doc["deployments"] as any)["sentiment"]["template_pins"]["default"];
+  const versionId = `${"sentiment"}@${(doc["deployments"] as any)["sentiment"]["prompt_pins"]["default"]}`;
   const decision = (doc["prompt_versions"] as any)[versionId]["decision"];
   decision["questions"] = JSON.parse('{"__proto__":{"type":"noul","instructions":"Read {{ diary }}"}}');
   const request = (await loaded(doc).prompt("sentiment")).request({ diary: "hello" });
@@ -88,7 +98,7 @@ it("rejects non-v1 prompt documents and requires the immutable version kind", as
   expect(() => loaded(legacy)).toThrow(/unsupported prompt document schema_version 5/u);
 
   const partial = snapshotDocument();
-  const versionId = (partial["deployments"] as any)["greeting"]["template_pins"]["default"];
+  const versionId = `${"greeting"}@${(partial["deployments"] as any)["greeting"]["prompt_pins"]["default"]}`;
   delete (partial["prompt_versions"] as any)[versionId]["kind"];
   const broken = await loaded(partial).prompt("greeting");
   expect(() => broken.request({ name: "Ada" })).toThrow(PreparedRequestError);
@@ -222,17 +232,47 @@ it("scopes schema v1 prompt versions by prompt and models by provider", async ()
 it("fails closed for schema v1 invalid pins and missing readable references", async () => {
   for (const promptVersion of ["2", "2abc", 2.9, 0]) {
     const invalid = readableSnapshotDocument();
-    (invalid["deployments"] as any)["greeting"]["prompt_version"] = promptVersion;
+    (invalid["deployments"] as any)["greeting"]["prompt_pins"]["default"] = promptVersion;
     await expect(loaded(invalid).prompt("greeting")).rejects.toThrow(UnknownTemplateError);
   }
 
   const missingVersion = readableSnapshotDocument();
   (missingVersion["deployments"] as any)["greeting"]["prompt_version"] = 99;
+  (missingVersion["deployments"] as any)["greeting"]["prompt_pins"]["default"] = 99;
   await expect(loaded(missingVersion).prompt("greeting")).rejects.toThrow(UnresolvedError);
 
   const missingModel = readableSnapshotDocument();
   (missingModel["deployments"] as any)["greeting"]["model"] = "missing/model";
   await expect(loaded(missingModel).prompt("greeting")).rejects.toThrow(UnresolvedError);
+});
+
+
+it("does not resolve schema v1 documents that only relabel old UUID resources", async () => {
+  const old = readableSnapshotDocument();
+  const deployments = old["deployments"] as any;
+  const versions = old["prompt_versions"] as any;
+  const models = old["models"] as any;
+  deployments["greeting"] = {
+    revision: "v2026.09.30-3",
+    model_id: "0198f2a1-0000-7000-8000-00000000e001",
+    template_pins: { default: "0198f2a1-0000-7000-8000-00000000a001" },
+    api: "chat_completions",
+    request_path: "/api/v1/chat/completions",
+  };
+  versions["0198f2a1-0000-7000-8000-00000000a001"] = {
+    id: "0198f2a1-0000-7000-8000-00000000a001",
+    prompt_template_id: "0198f2a1-0000-7000-8000-00000000b001",
+    number: 2,
+    kind: "chat",
+    engine: "liquid",
+    messages: [{ role: "user", content: "Hi" }],
+  };
+  models["0198f2a1-0000-7000-8000-00000000e001"] = {
+    id: "0198f2a1-0000-7000-8000-00000000e001",
+    provider: "openrouter",
+    model_id: "openai/gpt-4o-mini",
+  };
+  await expect(loaded(old).prompt("greeting")).rejects.toThrow(/pins no template|no live deployment/u);
 });
 
 it("drops schema v1 resources whose composite keys disagree with embedded fields", async () => {
@@ -300,7 +340,7 @@ it("composes app history and current input while retaining prepared options and 
 
 it.each(["liquid", "raw"])("rejects retired slots from cached %s prompt documents at both public render boundaries", async (engine) => {
   const doc = snapshotDocument();
-  const id = (doc.deployments as any).greeting.template_pins.default;
+  const id = `${"greeting"}@${(doc.deployments as any).greeting.prompt_pins.default}`;
   (doc.prompt_versions as any)[id].engine = engine;
   (doc.prompt_versions as any)[id].messages = [{ type: "slot", name: "history", role: "system" }];
   const prompt = await loaded(doc).prompt("greeting");

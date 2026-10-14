@@ -92,28 +92,22 @@ describe("the 10-second cache", () => {
     greeting.prompts = { greeting: (greeting.prompts as Record<string, unknown>).greeting };
     greeting.deployments = { greeting: (greeting.deployments as Record<string, unknown>).greeting };
     greeting.prompt_versions = {
-      "0198f2a1-0000-7000-8000-00000000a001": (greeting.prompt_versions as Record<string, unknown>)[
-        "0198f2a1-0000-7000-8000-00000000a001"
-      ],
-      "0198f2a1-0000-7000-8000-00000000a002": (greeting.prompt_versions as Record<string, unknown>)[
-        "0198f2a1-0000-7000-8000-00000000a002"
-      ],
+      "greeting@1": (greeting.prompt_versions as Record<string, unknown>)["greeting@1"],
+      "greeting@2": (greeting.prompt_versions as Record<string, unknown>)["greeting@2"],
     };
-    (greeting.models as Record<string, { model_id: string }>)[
-      "0198f2a1-0000-7000-8000-00000000e001"
-    ]!.model_id = "provider/model-a";
+    delete (greeting.models as Record<string, unknown>)["openrouter:openai/gpt-4o-mini"];
+    (greeting.deployments as any).greeting.model = "provider/model-a";
+    (greeting.models as Record<string, unknown>)["openrouter:provider/model-a"] = { provider: "openrouter", model: "provider/model-a", display_name: "provider/model-a", metadata: {}, provider_options: {}, capabilities: [], status: "active" };
 
     const summarize = snapshotDocument();
     summarize.prompts = { summarize: (summarize.prompts as Record<string, unknown>).summarize };
     summarize.deployments = { summarize: (summarize.deployments as Record<string, unknown>).summarize };
     summarize.prompt_versions = {
-      "0198f2a1-0000-7000-8000-00000000a003": (summarize.prompt_versions as Record<string, unknown>)[
-        "0198f2a1-0000-7000-8000-00000000a003"
-      ],
+      "summarize@4": (summarize.prompt_versions as Record<string, unknown>)["summarize@4"],
     };
-    (summarize.models as Record<string, { model_id: string }>)[
-      "0198f2a1-0000-7000-8000-00000000e001"
-    ]!.model_id = "provider/model-b";
+    delete (summarize.models as Record<string, unknown>)["openrouter:openai/gpt-4o-mini"];
+    (summarize.deployments as any).summarize.model = "provider/model-b";
+    (summarize.models as Record<string, unknown>)["openrouter:provider/model-b"] = { provider: "openrouter", model: "provider/model-b", display_name: "provider/model-b", metadata: {}, provider_options: {}, capabilities: [], status: "active" };
 
     const fetch = fakeFetch((url) => {
       if (url.includes("/prompts/greeting")) return snapshotResponse(greeting, '"greeting"');
@@ -336,9 +330,9 @@ describe("the server being down", () => {
   it("keeps the previous config when synchronous decoding exceeds the original deadline", async () => {
     const clock = fakeClock();
     const updated = snapshotDocument();
-    (updated.models as Record<string, { model_id: string }>)[
-      "0198f2a1-0000-7000-8000-00000000e001"
-    ]!.model_id = "provider/late-model";
+    delete (updated.models as Record<string, unknown>)["openrouter:openai/gpt-4o-mini"];
+    (updated.deployments as any).greeting.model = "provider/late-model";
+    (updated.models as Record<string, unknown>)["openrouter:provider/late-model"] = { provider: "openrouter", model: "provider/late-model", display_name: "provider/late-model", metadata: {}, provider_options: {}, capabilities: [], status: "active" };
     const fetch = fakeFetch((_url, _init, call) =>
       snapshotResponse(call === 0 ? snapshotDocument() : updated, call === 0 ? '"e1"' : '"e2"'),
     );
@@ -398,28 +392,22 @@ describe("the three tiers", () => {
     greeting.prompts = { greeting: (greeting.prompts as Record<string, unknown>).greeting };
     greeting.deployments = { greeting: (greeting.deployments as Record<string, unknown>).greeting };
     greeting.prompt_versions = {
-      "0198f2a1-0000-7000-8000-00000000a001": (greeting.prompt_versions as Record<string, unknown>)[
-        "0198f2a1-0000-7000-8000-00000000a001"
-      ],
-      "0198f2a1-0000-7000-8000-00000000a002": (greeting.prompt_versions as Record<string, unknown>)[
-        "0198f2a1-0000-7000-8000-00000000a002"
-      ],
+      "greeting@1": (greeting.prompt_versions as Record<string, unknown>)["greeting@1"],
+      "greeting@2": (greeting.prompt_versions as Record<string, unknown>)["greeting@2"],
     };
-    (greeting.models as Record<string, { model_id: string }>)[
-      "0198f2a1-0000-7000-8000-00000000e001"
-    ]!.model_id = "provider/model-a";
+    delete (greeting.models as Record<string, unknown>)["openrouter:openai/gpt-4o-mini"];
+    (greeting.deployments as any).greeting.model = "provider/model-a";
+    (greeting.models as Record<string, unknown>)["openrouter:provider/model-a"] = { provider: "openrouter", model: "provider/model-a", display_name: "provider/model-a", metadata: {}, provider_options: {}, capabilities: [], status: "active" };
 
     const summarize = snapshotDocument();
     summarize.prompts = { summarize: (summarize.prompts as Record<string, unknown>).summarize };
     summarize.deployments = { summarize: (summarize.deployments as Record<string, unknown>).summarize };
     summarize.prompt_versions = {
-      "0198f2a1-0000-7000-8000-00000000a003": (summarize.prompt_versions as Record<string, unknown>)[
-        "0198f2a1-0000-7000-8000-00000000a003"
-      ],
+      "summarize@4": (summarize.prompt_versions as Record<string, unknown>)["summarize@4"],
     };
-    (summarize.models as Record<string, { model_id: string }>)[
-      "0198f2a1-0000-7000-8000-00000000e001"
-    ]!.model_id = "provider/model-b";
+    delete (summarize.models as Record<string, unknown>)["openrouter:openai/gpt-4o-mini"];
+    (summarize.deployments as any).summarize.model = "provider/model-b";
+    (summarize.models as Record<string, unknown>)["openrouter:provider/model-b"] = { provider: "openrouter", model: "provider/model-b", display_name: "provider/model-b", metadata: {}, provider_options: {}, capabilities: [], status: "active" };
 
     const fetch = fakeFetch((url) => {
       if (url.includes("/prompts/greeting")) return snapshotResponse(greeting, '"greeting"');
