@@ -6,6 +6,7 @@ import { PromptOn } from "../src/index.js";
 import {
   fakeFetch,
   recordingLogger,
+  singlePromptDocument,
   snapshotDocument,
   snapshotResponse,
   startStubServer,
@@ -456,6 +457,34 @@ describe("the three tiers", () => {
       "/api/v1/prompts/summarize",
     ]);
   });
+  it("mirrors a fetched schema v9 single-prompt response byte-for-byte and reloads it", async () => {
+    const dir = tempDir();
+    cleanups.push(dir.cleanup);
+    const path = join(dir.path, "snap.json");
+    const raw = JSON.stringify(singlePromptDocument("greeting"));
+
+    const fetch = fakeFetch(() => new Response(raw, { status: 200, headers: { etag: '"sha256-v9"' } }));
+    const first = make({
+      apiKey: "ptn_sdkfixture_k",
+      baseUrl: "http://ptn.test",
+      fetch,
+      diskCache: path,
+      poll: false,
+    });
+    await first.ready();
+    expect((await first.prompt("greeting")).messages({ name: "Ada" })[1]?.content).toBe("Say hello to Ada.");
+
+    const promptPath = join(`${path}.prompts`, `${encodeURIComponent("greeting")}.json`);
+    expect(readFileSync(promptPath, "utf8")).toBe(raw);
+
+    const offline = make({ mode: "offline", diskCache: path, project: "sdkfixture" });
+    expect((await offline.prompt("greeting")).source).toBe("disk");
+
+    const out = join(dir.path, "bundle.json");
+    first.exportPrompts(out);
+    expect(readFileSync(out, "utf8")).toBe(raw);
+  });
+
   it("mirrors a fetched snapshot to disk atomically and reads it back on the next start", async () => {
     const dir = tempDir();
     cleanups.push(dir.cleanup);

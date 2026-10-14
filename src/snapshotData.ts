@@ -110,10 +110,10 @@ export interface DecodeResult {
   warnings: DecodeWarning[];
 }
 
-/** The current prompt document schema version emitted by PromptOn. Schema v5-v7 remain accepted. */
+/** The current bulk prompt document schema version emitted by PromptOn. Schema v5-v7 remain accepted. */
 export const SCHEMA_VERSION = 8;
 
-const SUPPORTED_SCHEMA_VERSIONS = new Set([5, 6, 7, 8]);
+const SUPPORTED_SCHEMA_VERSIONS = new Set([5, 6, 7, 8, 9]);
 const KINDS = new Set(["chat", "decision", "text", "embedding"]);
 const ENGINES = new Set(["liquid", "raw"]);
 const PAYLOAD_MODES = new Set(["full", "hash", "none"]);
@@ -139,7 +139,7 @@ export function decodePromptDocument(input: unknown): DecodeResult {
   if (typeof rawVersion === "number" && Number.isInteger(rawVersion)) {
     if (!SUPPORTED_SCHEMA_VERSIONS.has(rawVersion)) {
       throw new Error(
-        `unsupported prompt document schema_version ${String(rawVersion)}; this SDK reads versions 5 through ${String(SCHEMA_VERSION)}`,
+        `unsupported prompt document schema_version ${String(rawVersion)}; this SDK reads versions 5 through 9`,
       );
     }
   } else if (rawVersion !== undefined && rawVersion !== null) {
@@ -148,30 +148,76 @@ export function decodePromptDocument(input: unknown): DecodeResult {
     throw new Error("prompt document schema_version is required");
   }
 
-  if (!isRecord(input["prompts"])) throw new Error("prompt document prompts is required");
+  const normalized = rawVersion === 9 ? normalizeSinglePromptDocument(input) : input;
 
-  const deployments = decodeDeployments(input["deployments"], rawVersion, warnings);
-  const prompts = decodePrompts(input["prompts"], deployments, warnings);
+  if (!isRecord(normalized["prompts"])) throw new Error("prompt document prompts is required");
+
+  const deployments = decodeDeployments(normalized["deployments"], rawVersion, warnings);
+  const prompts = decodePrompts(normalized["prompts"], deployments, warnings);
 
   return {
     data: {
       schemaVersion: rawVersion,
-      project: asString(input["project"]),
-      environment: asString(input["environment"]),
+      project: asString(normalized["project"]),
+      environment: asString(normalized["environment"]),
       prompts,
       deployments,
       promptVersions: decodeById(
-        input["prompt_versions"],
+        normalized["prompt_versions"],
         (entry, fallbackId) => decodePromptVersion(entry, fallbackId, rawVersion, warnings),
         warnings,
       ),
       models: decodeById(
-        input["models"],
+        normalized["models"],
         (entry, fallbackId) => decodeModel(entry, fallbackId, rawVersion, warnings),
         warnings,
       ),
     },
     warnings,
+  };
+}
+
+function normalizeSinglePromptDocument(input: Record<string, unknown>): Record<string, unknown> {
+  for (const plural of ["prompts", "deployments", "prompt_versions", "models"]) {
+    if (Object.hasOwn(input, plural)) {
+      throw new Error(`schema_version 9 prompt document must use singular resources; found ${plural}`);
+    }
+  }
+  const prompt = input["prompt"];
+  const deployment = input["deployment"];
+  const version = input["prompt_version"];
+  const model = input["model"];
+  if (!isRecord(prompt)) throw new Error("schema v9 prompt document prompt is required");
+  if (!isRecord(deployment)) throw new Error("schema v9 prompt document deployment is required");
+  if (!isRecord(version)) throw new Error("schema v9 prompt document prompt_version is required");
+  if (!isRecord(model)) throw new Error("schema v9 prompt document model is required");
+
+  const key = strictString(prompt["key"]);
+  if (key === null || key.trim() === "") throw new Error("schema v9 prompt.key is required");
+  const versionPrompt = strictString(version["prompt"]);
+  if (versionPrompt !== key) throw new Error("schema v9 prompt_version.prompt must match prompt.key");
+  const number = strictPositiveInteger(version["number"]);
+  if (number === null) throw new Error("schema v9 prompt_version.number must be a positive integer");
+  if (deployment["prompt_version"] !== number) {
+    throw new Error("schema v9 deployment.prompt_version must match prompt_version.number");
+  }
+  const provider = strictString(model["provider"]);
+  const modelName = strictString(model["model"]);
+  if (provider === null || modelName === null) throw new Error("schema v9 model provider and model are required");
+  if (deployment["provider"] !== provider || deployment["model"] !== modelName) {
+    throw new Error("schema v9 deployment provider/model must match model");
+  }
+
+  const promptBody = { ...prompt };
+  delete promptBody["key"];
+  return {
+    schema_version: 9,
+    project: input["project"],
+    environment: input["environment"],
+    prompts: { [key]: promptBody },
+    deployments: { [key]: deployment },
+    prompt_versions: { [`${key}@${String(number)}`]: version },
+    models: { [`${provider}:${modelName}`]: model },
   };
 }
 

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
 import { PreparedRequestError, PromptOn, Result, TemplateRenderError, UnknownTemplateError, UnresolvedError } from "../src/index.js";
-import { fakeFetch, readableSnapshotDocument, snapshotDocument, snapshotResponse } from "./helpers.js";
+import { fakeFetch, readableSnapshotDocument, singlePromptDocument, snapshotDocument, snapshotResponse } from "./helpers.js";
 
 const clients: PromptOn[] = [];
 afterEach(async () => { await Promise.all(clients.splice(0).map((client) => client.close(100))); });
@@ -119,6 +119,48 @@ it("reads schema v8 prompt documents without public resource UUIDs", async () =>
   expect(client.logs[0]).not.toHaveProperty("deployment_id");
   expect(client.logs[0]).not.toHaveProperty("prompt_version_id");
   expect(client.logs[0]).not.toHaveProperty("model_id");
+});
+
+it("reads schema v9 single-prompt Chat and Decision documents", async () => {
+  const greeting = await loaded(singlePromptDocument("greeting")).prompt("greeting");
+  expect(greeting.deployment).toEqual({ id: null, revision: "v2026.09.30-3" });
+  expect(greeting.modelId).toBeNull();
+  expect(greeting.model).toBe("openai/gpt-4o-mini");
+  expect(greeting.provider).toBe("openrouter");
+  expect(greeting.promptVersion).toEqual({ id: null, number: 2 });
+  expect(greeting.messages({ name: "Ada" })[1]?.content).toBe("Say hello to Ada.");
+
+  const sentiment = await loaded(singlePromptDocument("sentiment")).prompt("sentiment");
+  const request = sentiment.request({ diary: "fine" });
+  expect(request.path).toBe("/api/v1/systemone");
+  expect(request.body["model"]).toBe("typesafe/jev-1.13");
+  expect(request.body["state"]).toEqual({ diary: "fine", static_key: "literal" });
+  expect(request.body["questions"]).toHaveProperty("mood");
+  expect(request.body["questions"]).toHaveProperty("intensity");
+});
+
+it("rejects incomplete, mixed or mismatched schema v9 single-prompt documents", () => {
+  const missing = singlePromptDocument("greeting");
+  delete (missing as any)["prompt_version"];
+  expect(() => loaded(missing)).toThrow(/prompt_version is required/u);
+
+  const mixed = singlePromptDocument("greeting", "production", { prompts: {} });
+  expect(() => loaded(mixed)).toThrow(/singular resources/u);
+
+  const mixedNull = singlePromptDocument("greeting", "production", { prompts: null });
+  expect(() => loaded(mixedNull)).toThrow(/singular resources/u);
+
+  const badVersionPrompt = singlePromptDocument("greeting");
+  (badVersionPrompt["prompt_version"] as any)["prompt"] = "review";
+  expect(() => loaded(badVersionPrompt)).toThrow(/prompt_version\.prompt/u);
+
+  const badDeploymentVersion = singlePromptDocument("greeting");
+  (badDeploymentVersion["deployment"] as any)["prompt_version"] = 99;
+  expect(() => loaded(badDeploymentVersion)).toThrow(/deployment\.prompt_version/u);
+
+  const badModel = singlePromptDocument("greeting");
+  (badModel["deployment"] as any)["model"] = "different/model";
+  expect(() => loaded(badModel)).toThrow(/provider\/model/u);
 });
 
 it("scopes schema v8 prompt versions by prompt and models by provider", async () => {

@@ -282,6 +282,36 @@ export function readableSnapshotDocument(
   };
 }
 
+/** The schema v9 single-prompt wire shape returned by GET /prompts/:key. */
+export function singlePromptDocument(
+  key = "greeting",
+  environment = "production",
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const readable = readableSnapshotDocument(environment);
+  const prompts = readable["prompts"] as Record<string, Record<string, unknown>>;
+  const deployments = readable["deployments"] as Record<string, Record<string, unknown>>;
+  const versions = readable["prompt_versions"] as Record<string, Record<string, unknown>>;
+  const models = readable["models"] as Record<string, Record<string, unknown>>;
+  const prompt = prompts[key];
+  const deployment = deployments[key];
+  if (!prompt || !deployment) throw new Error(`missing fixture prompt ${key}`);
+  const number = deployment["prompt_version"];
+  const version = versions[`${key}@${String(number)}`];
+  const model = models[`${String(deployment["provider"])}:${String(deployment["model"])}`];
+  if (!version || !model) throw new Error(`missing fixture resources for ${key}`);
+  return {
+    schema_version: 9,
+    project: readable["project"],
+    environment,
+    prompt: { key, ...prompt },
+    deployment,
+    prompt_version: version,
+    model,
+    ...overrides,
+  };
+}
+
 /** One request a stub or fake recorded. */
 export interface RecordedRequest {
   method: string;
