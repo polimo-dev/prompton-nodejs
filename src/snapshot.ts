@@ -269,10 +269,16 @@ export class SnapshotManager {
     for (const warning of decoded.warnings) {
       this.quiet.warn(`snapshot decoded with a warning: ${warning.kind}`);
     }
-    if (decoded.data.environment !== null && decoded.data.environment !== this.config.environment) {
+    if (decoded.data.environment === null) {
+      throw new Error(`the server returned a snapshot without an environment, this process reads ${this.config.environment}`);
+    }
+    if (decoded.data.environment !== this.config.environment) {
       throw new Error(
         `the server returned a snapshot for environment ${decoded.data.environment}, this process reads ${this.config.environment}`,
       );
+    }
+    if (decoded.data.project === null && this.config.project !== null) {
+      throw new Error(`the server returned a snapshot without a project, this process reads ${this.config.project}`);
     }
     if (
       decoded.data.project !== null &&

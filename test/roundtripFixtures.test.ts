@@ -25,6 +25,13 @@ describe("real schema v1 server fixtures", () => {
     const detail = fixture("chat-detail.json");
     const variables = fixture("chat-variables.json");
     const rendered = fixture("chat-render.json");
+    expect(detail.prompt.variables).toContainEqual({
+      name: "question",
+      type: "string",
+      required: true,
+      description: "Question to answer",
+      example: "refund",
+    });
     const client = loaded(detail);
     try {
       const prompt = await client.prompt(rendered.key);
@@ -44,6 +51,13 @@ describe("real schema v1 server fixtures", () => {
     const detail = fixture("decision-detail.json");
     const variables = fixture("decision-variables.json");
     const rendered = fixture("decision-render.json");
+    expect(detail.prompt.variables).toContainEqual({
+      name: "ticket",
+      type: "string",
+      required: true,
+      description: "Ticket summary",
+      example: "refund",
+    });
     const client = loaded(detail);
     try {
       const prompt = await client.prompt(rendered.key);

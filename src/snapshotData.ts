@@ -146,10 +146,14 @@ export function decodePromptDocument(input: unknown): DecodeResult {
 
   const normalized = normalizePromptDocument(input);
 
-  if (!isRecord(normalized["prompts"])) throw new Error("prompt document prompts is required");
+  for (const collection of ["prompts", "deployments", "prompt_versions", "models"]) {
+    if (!isRecord(normalized[collection])) {
+      throw new Error(`prompt document ${collection} must be a keyed object`);
+    }
+  }
 
   const deployments = decodeDeployments(normalized["deployments"], warnings);
-  const prompts = decodePrompts(normalized["prompts"], deployments, warnings);
+  const prompts = decodePrompts(normalized["prompts"] as Record<string, unknown>, deployments, warnings);
 
   return {
     data: {

@@ -104,6 +104,20 @@ it("rejects non-v1 prompt documents and requires the immutable version kind", as
   expect(() => broken.request({ name: "Ada" })).toThrow(PreparedRequestError);
 });
 
+
+it("rejects malformed aggregate documents before treating empty maps as valid", () => {
+  const base = { schema_version: 1, project: "sdkfixture", environment: "production", prompts: {}, deployments: {}, prompt_versions: {}, models: {} };
+  expect(() => decodePromptDocument(base)).not.toThrow();
+  for (const collection of ["deployments", "prompt_versions", "models"] as const) {
+    const missing = { ...base } as Record<string, unknown>;
+    delete missing[collection];
+    expect(() => decodePromptDocument(missing)).toThrow(/keyed object/u);
+
+    const array = { ...base, [collection]: [] };
+    expect(() => decodePromptDocument(array)).toThrow(/keyed object/u);
+  }
+});
+
 it("decodes prompt variable definitions from variables and rejects old input_schema metadata", () => {
   const decoded = decodePromptDocument(readableSnapshotDocument()).data;
   expect(decoded.prompts["greeting"]?.variables).toEqual([

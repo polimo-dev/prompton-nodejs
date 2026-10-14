@@ -577,6 +577,33 @@ describe("the three tiers", () => {
     expect(logger.lines.join("\n")).toMatch(/refusing the bundle snapshot/u);
   });
 
+
+  it("refuses a remote document without scope metadata", async () => {
+    const missingEnvironment = snapshotDocument();
+    delete (missingEnvironment as any).environment;
+    const envFetch = fakeFetch(() => snapshotResponse(missingEnvironment));
+    const envClient = make({
+      apiKey: "ptn_sdkfixture_key",
+      baseUrl: "http://ptn.test",
+      fetch: envFetch,
+      diskCache: false,
+      poll: false,
+    });
+    await expect(envClient.prompt("greeting")).rejects.toThrow(/without an environment/u);
+
+    const missingProject = snapshotDocument();
+    delete (missingProject as any).project;
+    const projectFetch = fakeFetch(() => snapshotResponse(missingProject));
+    const projectClient = make({
+      apiKey: "ptn_sdkfixture_key",
+      baseUrl: "http://ptn.test",
+      fetch: projectFetch,
+      diskCache: false,
+      poll: false,
+    });
+    await expect(projectClient.prompt("greeting")).rejects.toThrow(/without a project/u);
+  });
+
   it("ignores a half-written or corrupt file instead of failing", () => {
     const dir = tempDir();
     cleanups.push(dir.cleanup);
