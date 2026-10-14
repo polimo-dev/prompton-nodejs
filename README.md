@@ -22,10 +22,10 @@ your app ──load prompt──▶ prompt + model + params          (per-prompt
 
 ## Install
 
-Not published to npm yet. Depend on the repository:
+Install the v0.6.0 GitHub source release:
 
 ```sh
-npm install github:polimo-dev/prompton-nodejs
+npm install github:polimo-dev/prompton-nodejs#v0.6.0
 ```
 
 `dist/` is not committed; npm runs the package's `prepare` script on a git install, which builds it.
