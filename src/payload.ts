@@ -17,6 +17,8 @@ import type { Logger } from "./logger.js";
 /** A record in the shape `POST /logs` accepts. */
 export type LogRecord = Record<string, unknown>;
 
+export const RETIRED_RESOURCE_FIELDS = ["deployment_id", "prompt_version_id", "model_id"] as const;
+
 /** The three knobs of a payload policy. */
 export interface PolicyInput {
   mode?: string | null;
@@ -60,6 +62,13 @@ export function applyPayloadPolicy(
   out = capErrorMessage(out);
   out = hashEndUserRef(out, options.hashEndUser === true);
   return redact(out, options);
+}
+
+/** Drops retired public resource UUID references before a log record crosses the SDK boundary. */
+export function sanitizeResourceFields(record: LogRecord): LogRecord {
+  const out: LogRecord = { ...record };
+  for (const field of RETIRED_RESOURCE_FIELDS) delete out[field];
+  return out;
 }
 
 /** Fills in a partial policy from the defaults and clamps `sample_rate` to 0..1. */

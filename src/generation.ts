@@ -185,11 +185,9 @@ export function buildRecord(input: BuildInput): LogRecord {
   const record: LogRecord = {
     id: input.id,
     prompt_key: r.promptKey,
-    deployment_id: r.deploymentId,
     deployment_revision: r.deploymentRevision,
     template: r.template,
-    prompt_version_id: r.promptVersionId,
-    model_id: r.modelId,
+    prompt_version_number: r.promptVersionNumber,
     source: r.source,
     context: { ...(meta.context ?? {}) },
     kind: r.kind,
@@ -243,15 +241,13 @@ export function completeRecord(
     out["kind"] ??= resolution.kind;
     out["model"] ??= resolution.model;
     out["source"] ??= resolution.source;
-    if (resolution.deploymentId !== null) out["deployment_id"] ??= resolution.deploymentId;
     if (resolution.deploymentRevision !== null) {
       out["deployment_revision"] ??= resolution.deploymentRevision;
     }
     if (resolution.template !== null) out["template"] ??= resolution.template;
-    if (resolution.promptVersionId !== null) {
-      out["prompt_version_id"] ??= resolution.promptVersionId;
+    if (resolution.promptVersionNumber !== null) {
+      out["prompt_version_number"] ??= resolution.promptVersionNumber;
     }
-    if (resolution.modelId !== null) out["model_id"] ??= resolution.modelId;
     if (resolution.provider !== null) out["provider"] ??= resolution.provider;
   }
 

@@ -92,8 +92,9 @@ describe("resolution", () => {
 
     expect(client.logs[0]).toMatchObject({
       template: "ko",
-      prompt_version_id: "0198f2a1-0000-7000-8000-00000000a002",
+      prompt_version_number: 1,
     });
+    expect(client.logs[0]).not.toHaveProperty("prompt_version_id");
   });
 
   it("does not let a failed named-prompt render poison following track evidence", async () => {
@@ -106,8 +107,9 @@ describe("resolution", () => {
     expect(prompt.template).toBe("default");
     expect(client.logs[0]).toMatchObject({
       template: "default",
-      prompt_version_id: "0198f2a1-0000-7000-8000-00000000a001",
+      prompt_version_number: 2,
     });
+    expect(client.logs[0]).not.toHaveProperty("prompt_version_id");
   });
 
   it("renders a text prompt", async () => {
@@ -398,12 +400,28 @@ describe("log()", () => {
       prompt_key: "greeting",
       model: "openai/gpt-4o-mini",
       template: "ko",
-      deployment_id: "0198f2a1-0000-7000-8000-00000000d001",
       deployment_revision: "v2026.09.30-3",
-      prompt_version_id: "0198f2a1-0000-7000-8000-00000000a002",
-      model_id: "0198f2a1-0000-7000-8000-00000000e001",
+      prompt_version_number: 1,
       source: "manual",
     });
+    expect(client.logs[0]).not.toHaveProperty("deployment_id");
+    expect(client.logs[0]).not.toHaveProperty("prompt_version_id");
+    expect(client.logs[0]).not.toHaveProperty("model_id");
+  });
+
+  it("strips retired resource UUID fields from hand-built records", () => {
+    const client = loaded();
+    client.log({
+      prompt_key: "greeting",
+      model: "openai/gpt-4o-mini",
+      status: "ok",
+      deployment_id: "0198f2a1-0000-7000-8000-00000000d001",
+      prompt_version_id: "0198f2a1-0000-7000-8000-00000000a001",
+      model_id: "0198f2a1-0000-7000-8000-00000000e001",
+    });
+    expect(client.logs[0]).not.toHaveProperty("deployment_id");
+    expect(client.logs[0]).not.toHaveProperty("prompt_version_id");
+    expect(client.logs[0]).not.toHaveProperty("model_id");
   });
 
   it("drops a record with no status instead of failing the caller's request", () => {
@@ -455,8 +473,11 @@ describe("log()", () => {
 
 describe("sending monitoring logs", () => {
   it("posts one batch per environment to /logs", async () => {
+    let logAttempts = 0;
     const fetch = fakeFetch((url) => {
       if (url.includes("/prompts")) return snapshotResponse(snapshotDocument());
+      logAttempts += 1;
+      if (logAttempts === 1) return new Response(JSON.stringify({ error: { code: "rate_limited" } }), { status: 429 });
       return new Response(JSON.stringify({ accepted: 1, duplicates: 0, rejected: [] }), {
         status: 202,
       });
@@ -468,7 +489,14 @@ describe("sending monitoring logs", () => {
       environment: "staging",
     });
     client.loadPrompts(snapshotDocument("staging"));
-    client.log({ prompt_key: "greeting", model: "m", status: "ok" });
+    client.log({
+      prompt_key: "greeting",
+      model: "m",
+      status: "ok",
+      deployment_id: "0198f2a1-0000-7000-8000-00000000d001",
+      prompt_version_id: "0198f2a1-0000-7000-8000-00000000a001",
+      model_id: "0198f2a1-0000-7000-8000-00000000e001",
+    });
     const result = await client.flush(2000);
 
     const post = fetch.calls.find((call) => call.url.includes("/logs"));
@@ -479,8 +507,15 @@ describe("sending monitoring logs", () => {
     expect((post?.init?.headers as Record<string, string>)["user-agent"]).toMatch(
       /^prompton-nodejs\/\d+\.\d+\.\d+$/u,
     );
-    const body = JSON.parse(post?.init?.body as string) as { logs: unknown[] };
-    expect(body.logs.length).toBe(1);
+    const posts = fetch.calls.filter((call) => call.url.includes("/logs"));
+    expect(posts).toHaveLength(2);
+    for (const sent of posts) {
+      const body = JSON.parse(sent.init?.body as string) as { logs: Record<string, unknown>[] };
+      expect(body.logs.length).toBe(1);
+      expect(body.logs[0]).not.toHaveProperty("deployment_id");
+      expect(body.logs[0]).not.toHaveProperty("prompt_version_id");
+      expect(body.logs[0]).not.toHaveProperty("model_id");
+    }
     expect(result.accepted).toBe(1);
   });
 

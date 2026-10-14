@@ -323,8 +323,9 @@ default treats the returned object as that shape already, and a returned string 
 | Field | Filled by |
 |---|---|
 | `id` | The SDK — a UUIDv7, and the idempotency key: a resend is counted as a duplicate, never stored twice |
-| `prompt_key`, `kind`, `model`, `model_id`, `provider` | Prompt evidence |
-| `deployment_id`, `deployment_revision`, `template`, `prompt_version_id` | Prompt evidence — this is the evidence that ties an answer to a pin. `deployment_revision` is a string like `v2026.09.30-1` |
+| `prompt_key`, `kind`, `model`, `provider` | Readable prompt evidence |
+| `deployment_revision`, `template`, `prompt_version_number` | Readable prompt evidence — this ties an answer to a pin. `deployment_revision` is a string like `v2026.09.30-1`; `prompt_version_number` is present when the prompt has a pinned version |
+| Compatibility | Log requests no longer include retired resource UUID refs (`deployment_id`, `prompt_version_id`, `model_id`). Older released SDKs that still emit them need the matching server rollout before they can post logs to the new request contract |
 | `source` | `remote` / `disk` / `bundle` / `manual` |
 | `status`, `error` | `ok`, or `error` with `kind` (`http_4xx`, `http_5xx`, `rate_limited`, `timeout`, `transport`, `parse`, `app`), `status` and `message` |
 | `finish_reason`, `stop_kind` | The provider's raw reason, normalised to `stop` / `length` / `tool_call` / `content_filter` / `other` |

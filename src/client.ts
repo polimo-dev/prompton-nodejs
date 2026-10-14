@@ -26,7 +26,7 @@ import {
   type LogMeta,
   type ResultLike,
 } from "./generation.js";
-import { applyPayloadPolicy, type LogRecord } from "./payload.js";
+import { applyPayloadPolicy, sanitizeResourceFields, type LogRecord } from "./payload.js";
 import {
   DEFAULT_TEMPLATE,
   templateNamesFromSnapshot,
@@ -813,12 +813,12 @@ export class PromptOn {
     if (record["status"] === "error" && error["kind"] === "transport" && isClosedTransportMessage(error["message"])) {
       return;
     }
-    const final = applyPayloadPolicy(record, policy, {
+    const final = sanitizeResourceFields(applyPayloadPolicy(record, policy, {
       payloadDefaults: this.config.payloadDefaults,
       hashEndUser: this.config.hashEndUser,
       redact: this.config.redact,
       logger: this.config.logger,
-    });
+    }));
     if (this.config.mode === "test") {
       this.captured.push(final);
       return;
@@ -836,7 +836,7 @@ export class PromptOn {
         method: "POST",
         path: "/logs",
         query: { environment: this.config.environment },
-        body: JSON.stringify({ logs: records }),
+        body: JSON.stringify({ logs: records.map((record) => sanitizeResourceFields(record)) }),
         timeoutMs: this.config.requestTimeoutMs,
       });
     } catch (error) {

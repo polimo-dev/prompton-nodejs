@@ -367,7 +367,11 @@ describe("log_record.json", () => {
       optionalEnum(record["usage"]?.["cost_source"], ["provider", "catalog", "unknown"]);
 
       for (const key of ["deployment_id", "prompt_version_id", "model_id"]) {
-        if (record[key]) expect(record[key]).toMatch(UUID);
+        expect(record).not.toHaveProperty(key);
+      }
+      if (record["prompt_version_number"] !== undefined) {
+        expect(Number.isInteger(record["prompt_version_number"])).toBe(true);
+        expect(record["prompt_version_number"]).toBeGreaterThan(0);
       }
       if (record["error"]) {
         expect([

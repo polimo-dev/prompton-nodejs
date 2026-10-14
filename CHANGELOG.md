@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
 
+- Monitoring logs now send readable prompt evidence: `prompt_key`, `deployment_revision`,
+  `provider`, `model` and optional `prompt_version_number`. The SDK strips retired
+  `deployment_id`, `prompt_version_id` and `model_id` request fields from automatic, manual and
+  queued/retried log payloads; older released SDKs that still send those fields require a matching
+  server compatibility rollout.
 - Omit the known closed Req transport generation errors and matching error completion events
   before submission, preserving callback errors, application retries, and unrelated monitoring.
 - Removed message-slot expansion. Retired `type: "slot"` entries now fail with guidance to compose
