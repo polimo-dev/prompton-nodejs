@@ -165,7 +165,11 @@ export function decodePromptDocument(input: unknown): DecodeResult {
         (entry, fallbackId) => decodePromptVersion(entry, fallbackId, rawVersion, warnings),
         warnings,
       ),
-      models: decodeById(input["models"], (entry, fallbackId) => decodeModel(entry, fallbackId, rawVersion), warnings),
+      models: decodeById(
+        input["models"],
+        (entry, fallbackId) => decodeModel(entry, fallbackId, rawVersion, warnings),
+        warnings,
+      ),
     },
     warnings,
   };
@@ -253,7 +257,7 @@ function decodeDeployments(
     }
     const pins: Record<string, string> = {};
     if (schemaVersion >= 8) {
-      const number = asPositiveInteger(value["prompt_version"]);
+      const number = strictPositiveInteger(value["prompt_version"]);
       if (number !== null) {
         pins["default"] = `${key}@${String(number)}`;
       } else if (value["prompt_version"] !== null && value["prompt_version"] !== undefined) {
@@ -274,11 +278,15 @@ function decodeDeployments(
         warnings.push({ kind: "invalid_template_pins", detail: key });
       }
     }
+    const deploymentModelId = schemaVersion >= 8 ? modelKey(value["provider"], value["model"]) : asString(value["model_id"]);
+    if (schemaVersion >= 8 && deploymentModelId === null) {
+      warnings.push({ kind: "invalid_model_ref", detail: key });
+    }
     deployments[key] = {
       id: schemaVersion >= 8 ? null : asString(value["id"]),
       promptKey: asString(value["prompt_key"]) ?? key,
       revision: asRevision(value["revision"], key),
-      modelId: schemaVersion >= 8 ? modelKey(value["provider"], value["model"]) : asString(value["model_id"]),
+      modelId: schemaVersion >= 8 ? (deploymentModelId ?? `invalid:${key}`) : deploymentModelId,
       api: schemaVersion >= 6 ? asString(value["api"]) : null,
       requestPath: schemaVersion >= 6 ? asString(value["request_path"]) : null,
       params: asRecord(value["params"]),
@@ -289,12 +297,19 @@ function decodeDeployments(
   return deployments;
 }
 
-function decodeById<T extends { id: string | null; lookupKey?: string }>(
+function decodeById<T extends { id: string | null; lookupKey?: string | null }>(
   raw: unknown,
-  decode: (entry: Record<string, unknown>, fallbackId: string) => T,
+  decode: (entry: Record<string, unknown>, fallbackId: string) => T | null,
   warnings: DecodeWarning[],
 ): Record<string, T> {
   const out: Record<string, T> = {};
+  const insert = (key: string, decoded: T): void => {
+    if (Object.prototype.hasOwnProperty.call(out, key)) {
+      warnings.push({ kind: "invalid_entry", detail: `duplicate:${key}` });
+      return;
+    }
+    out[key] = decoded;
+  };
   if (raw === null || raw === undefined) return out;
   if (Array.isArray(raw)) {
     for (const entry of raw) {
@@ -304,7 +319,8 @@ function decodeById<T extends { id: string | null; lookupKey?: string }>(
       }
       const fallbackId = asString(entry["id"]) ?? "";
       const decoded = decode(entry, fallbackId);
-      out[decoded.id ?? decoded.lookupKey ?? fallbackId] = decoded;
+      if (decoded === null) continue;
+      insert(decoded.id ?? decoded.lookupKey ?? fallbackId, decoded);
     }
     return out;
   }
@@ -318,7 +334,8 @@ function decodeById<T extends { id: string | null; lookupKey?: string }>(
       continue;
     }
     const decoded = decode(entry, id);
-    out[decoded.id ?? decoded.lookupKey ?? id] = decoded;
+    if (decoded === null) continue;
+    insert(decoded.id ?? decoded.lookupKey ?? id, decoded);
   }
   return out;
 }
@@ -328,14 +345,15 @@ function decodePromptVersion(
   fallbackId: string,
   schemaVersion: number,
   warnings: DecodeWarning[],
-): PromptVersion {
+): PromptVersion | null {
   const engine = asString(raw["engine"]) ?? "liquid";
   const kind = schemaVersion >= 6 ? asString(raw["kind"]) : null;
-  const promptKey = asString(raw["prompt"]);
-  const number = asInteger(raw["number"]);
+  const promptKey = schemaVersion >= 8 ? strictString(raw["prompt"]) : asString(raw["prompt"]);
+  const number = schemaVersion >= 8 ? strictPositiveInteger(raw["number"]) : asInteger(raw["number"]);
   const key = schemaVersion >= 8 && promptKey !== null && number !== null ? `${promptKey}@${String(number)}` : fallbackId;
-  if (schemaVersion >= 8 && (promptKey === null || number === null || number <= 0)) {
+  if (schemaVersion >= 8 && (promptKey === null || number === null || key !== fallbackId)) {
     warnings.push({ kind: "invalid_prompt_version", detail: fallbackId });
+    return null;
   }
   return {
     id: schemaVersion >= 8 ? null : (asString(raw["id"]) ?? fallbackId),
@@ -383,13 +401,22 @@ function decodeTools(raw: unknown): ToolDefinitions | null {
   return out;
 }
 
-function decodeModel(raw: Record<string, unknown>, fallbackId: string, schemaVersion: number): PromptModel {
+function decodeModel(
+  raw: Record<string, unknown>,
+  fallbackId: string,
+  schemaVersion: number,
+  warnings: DecodeWarning[],
+): PromptModel | null {
   const capabilities = Array.isArray(raw["capabilities"])
     ? raw["capabilities"].map((value) => asString(value)).filter((value): value is string => value !== null)
     : [];
-  const provider = asString(raw["provider"]);
-  const model = schemaVersion >= 8 ? asString(raw["model"]) : asString(raw["model_id"]);
+  const provider = schemaVersion >= 8 ? strictString(raw["provider"]) : asString(raw["provider"]);
+  const model = schemaVersion >= 8 ? strictString(raw["model"]) : asString(raw["model_id"]);
   const key = schemaVersion >= 8 && provider !== null && model !== null ? `${provider}:${model}` : fallbackId;
+  if (schemaVersion >= 8 && (provider === null || model === null || key !== fallbackId)) {
+    warnings.push({ kind: "invalid_entry", detail: fallbackId });
+    return null;
+  }
   return {
     id: schemaVersion >= 8 ? null : (asString(raw["id"]) ?? fallbackId),
     lookupKey: key,
@@ -417,6 +444,10 @@ function asString(value: unknown): string | null {
   return null;
 }
 
+function strictString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
 function asRevision(value: unknown, key: string): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "string") return value;
@@ -432,14 +463,13 @@ function asInteger(value: unknown): number | null {
   return null;
 }
 
-function asPositiveInteger(value: unknown): number | null {
-  const parsed = asInteger(value);
-  return parsed !== null && parsed > 0 ? parsed : null;
+function strictPositiveInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
 }
 
 function modelKey(providerValue: unknown, modelValue: unknown): string | null {
-  const provider = asString(providerValue);
-  const model = asString(modelValue);
+  const provider = strictString(providerValue);
+  const model = strictString(modelValue);
   return provider !== null && model !== null ? `${provider}:${model}` : null;
 }
 

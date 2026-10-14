@@ -1,10 +1,9 @@
 {
-  "schema_version": 6,
+  "schema_version": 8,
   "project": "sdkfixture",
   "environment": "production",
   "prompts": {
     "greeting": {
-      "id": "01a069cb-07cb-74c2-87dc-10a06efdc4fb",
       "kind": "chat",
       "input_schema": [
         {
@@ -27,25 +26,21 @@
   },
   "deployments": {
     "greeting": {
-      "id": "01a069cb-0814-77f3-a866-5433348ac431",
       "revision": "v2026.09.30-1",
-      "model_id": "01a069cb-07c2-7e11-9011-85af7e778f96",
+      "provider": "openrouter",
+      "model": "openai/gpt-4o-mini",
+      "prompt_version": 1,
       "api": "chat_completions",
       "request_path": "/api/v1/chat/completions",
       "params": {
         "temperature": 0.2
       },
-      "provider_options": {},
-      "template_pins": {
-        "default": "01a069cb-07f1-7c90-b3a6-cdf8d2d7ed48",
-        "ko": "01a069cb-07fe-7de6-9710-3ccae0f81461"
-      }
+      "provider_options": {}
     }
   },
   "prompt_versions": {
-    "01a069cb-07f1-7c90-b3a6-cdf8d2d7ed48": {
-      "id": "01a069cb-07f1-7c90-b3a6-cdf8d2d7ed48",
-      "prompt_template_id": "01a069cb-07e8-7b2f-9f56-0a4f3a1d5a11",
+    "greeting@1": {
+      "prompt": "greeting",
       "number": 1,
       "kind": "chat",
       "engine": "liquid",
@@ -55,28 +50,15 @@
           "content": "You are a friendly greeter. Answer in one short line. Visitor: {{ name }}."
         }
       ],
-      "text_template": null
-    },
-    "01a069cb-07fe-7de6-9710-3ccae0f81461": {
-      "id": "01a069cb-07fe-7de6-9710-3ccae0f81461",
-      "prompt_template_id": "01a069cb-07f6-7a0e-8f21-2c6f9b8e3d02",
-      "number": 1,
-      "kind": "chat",
-      "engine": "liquid",
-      "messages": [
-        {
-          "role": "system",
-          "content": "너는 친절한 인사 도우미다. 한 줄로 답한다. Visitor: {{ name }}."
-        }
-      ],
-      "text_template": null
+      "text_template": null,
+      "decision": null,
+      "tools": null
     }
   },
   "models": {
-    "01a069cb-07c2-7e11-9011-85af7e778f96": {
-      "id": "01a069cb-07c2-7e11-9011-85af7e778f96",
+    "openrouter:openai/gpt-4o-mini": {
       "provider": "openrouter",
-      "model_id": "openai/gpt-4o-mini",
+      "model": "openai/gpt-4o-mini",
       "display_name": "GPT-4o mini",
       "metadata": {},
       "provider_options": {

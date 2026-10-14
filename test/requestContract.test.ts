@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
-import { PreparedRequestError, PromptOn, Result, TemplateRenderError, UnknownTemplateError } from "../src/index.js";
+import { PreparedRequestError, PromptOn, Result, TemplateRenderError, UnknownTemplateError, UnresolvedError } from "../src/index.js";
 import { fakeFetch, readableSnapshotDocument, snapshotDocument, snapshotResponse } from "./helpers.js";
 
 const clients: PromptOn[] = [];
@@ -165,21 +165,59 @@ it("scopes schema v8 prompt versions by prompt and models by provider", async ()
   ]);
 });
 
-it("warns for schema v8 invalid pins and missing readable references", async () => {
-  const invalid = readableSnapshotDocument();
-  (invalid["deployments"] as any)["greeting"]["prompt_version"] = "latest";
-  await expect(loaded(invalid).prompt("greeting")).rejects.toThrow(UnknownTemplateError);
+it("fails closed for schema v8 invalid pins and missing readable references", async () => {
+  for (const promptVersion of ["2", "2abc", 2.9, 0]) {
+    const invalid = readableSnapshotDocument();
+    (invalid["deployments"] as any)["greeting"]["prompt_version"] = promptVersion;
+    await expect(loaded(invalid).prompt("greeting")).rejects.toThrow(UnknownTemplateError);
+  }
 
-  const missing = readableSnapshotDocument();
-  (missing["deployments"] as any)["greeting"]["prompt_version"] = 99;
-  (missing["deployments"] as any)["greeting"]["model"] = "missing/model";
-  const prompt = await loaded(missing).prompt("greeting");
-  expect(prompt.model).toBeNull();
-  expect(prompt.promptVersion).toBeNull();
-  expect(prompt.warnings).toEqual([
-    { kind: "missing_prompt_version", detail: "greeting@99" },
-    { kind: "missing_model", detail: "openrouter:missing/model" },
-  ]);
+  const missingVersion = readableSnapshotDocument();
+  (missingVersion["deployments"] as any)["greeting"]["prompt_version"] = 99;
+  await expect(loaded(missingVersion).prompt("greeting")).rejects.toThrow(UnresolvedError);
+
+  const missingModel = readableSnapshotDocument();
+  (missingModel["deployments"] as any)["greeting"]["model"] = "missing/model";
+  await expect(loaded(missingModel).prompt("greeting")).rejects.toThrow(UnresolvedError);
+});
+
+it("drops schema v8 resources whose composite keys disagree with embedded fields", async () => {
+  const badVersion = readableSnapshotDocument();
+  (badVersion["prompt_versions"] as any)["greeting@2"] = {
+    ...(badVersion["prompt_versions"] as any)["greeting@2"],
+    prompt: "review",
+  };
+  await expect(loaded(badVersion).prompt("greeting")).rejects.toThrow(UnresolvedError);
+
+  const badNumber = readableSnapshotDocument();
+  (badNumber["prompt_versions"] as any)["greeting@2"] = {
+    ...(badNumber["prompt_versions"] as any)["greeting@2"],
+    number: 2.9,
+  };
+  await expect(loaded(badNumber).prompt("greeting")).rejects.toThrow(UnresolvedError);
+
+  const badModel = readableSnapshotDocument();
+  (badModel["models"] as any)["openrouter:openai/gpt-4o-mini"] = {
+    ...(badModel["models"] as any)["openrouter:openai/gpt-4o-mini"],
+    provider: "direct",
+  };
+  await expect(loaded(badModel).prompt("greeting")).rejects.toThrow(UnresolvedError);
+
+  const badDeploymentModel = readableSnapshotDocument();
+  (badDeploymentModel["deployments"] as any)["greeting"]["model"] = 123;
+  await expect(loaded(badDeploymentModel).prompt("greeting")).rejects.toThrow(UnresolvedError);
+
+  const duplicate = readableSnapshotDocument();
+  (duplicate["models"] as any)["direct:openai/gpt-4o-mini"] = {
+    provider: "openrouter",
+    model: "openai/gpt-4o-mini",
+    display_name: "alias",
+    metadata: {},
+    provider_options: { only: ["Wrong"] },
+    capabilities: [],
+    status: "active",
+  };
+  expect((await loaded(duplicate).prompt("greeting")).providerOptions).toEqual({ only: ["OpenAI"] });
 });
 
 it("composes app history and current input while retaining prepared options and logging final messages", async () => {

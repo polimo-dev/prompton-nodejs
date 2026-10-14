@@ -114,10 +114,12 @@ export function resolvePromptFromSnapshot(
   const warnings: ResolutionWarning[] = [];
   const version = versionId === null ? null : (snapshot.promptVersions[versionId] ?? null);
   if (versionId !== null && version === null) {
+    if (snapshot.schemaVersion >= 8) throw new UnresolvedError(promptKey);
     warnings.push({ kind: "missing_prompt_version", detail: versionId });
   }
   const model = deployment.modelId === null ? null : (snapshot.models[deployment.modelId] ?? null);
   if (deployment.modelId !== null && model === null) {
+    if (snapshot.schemaVersion >= 8) throw new UnresolvedError(promptKey);
     warnings.push({ kind: "missing_model", detail: deployment.modelId });
   }
 
