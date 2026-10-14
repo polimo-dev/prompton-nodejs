@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { decodePromptDocument, PromptOn } from "../src/index.js";
 
-const ROUNDTRIP = "/Users/ys/ws/.omx/artifacts/variables-20261014/roundtrip";
+const ROUNDTRIP = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "schema1");
 
 function fixture(name: string): Record<string, any> {
   return JSON.parse(readFileSync(join(ROUNDTRIP, name), "utf8"));
@@ -25,7 +26,8 @@ describe("real schema v1 server fixtures", () => {
     const detail = fixture("chat-detail.json");
     const variables = fixture("chat-variables.json");
     const rendered = fixture("chat-render.json");
-    expect(detail.prompt.variables).toContainEqual({
+    const decoded = decodePromptDocument(detail).data;
+    expect(decoded.prompts["support_reply"]?.variables).toContainEqual({
       name: "question",
       type: "string",
       required: true,
@@ -51,7 +53,8 @@ describe("real schema v1 server fixtures", () => {
     const detail = fixture("decision-detail.json");
     const variables = fixture("decision-variables.json");
     const rendered = fixture("decision-render.json");
-    expect(detail.prompt.variables).toContainEqual({
+    const decoded = decodePromptDocument(detail).data;
+    expect(decoded.prompts["decision_triage"]?.variables).toContainEqual({
       name: "ticket",
       type: "string",
       required: true,
