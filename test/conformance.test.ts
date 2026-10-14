@@ -144,7 +144,7 @@ describe("prompt.json", () => {
 
   it("every prompt document decodes as a supported schema", () => {
     for (const data of documents.values()) {
-      expect([5, 6, SCHEMA_VERSION]).toContain(data.schemaVersion);
+      expect([5, 6, 7, SCHEMA_VERSION]).toContain(data.schemaVersion);
     }
   });
 
@@ -152,7 +152,7 @@ describe("prompt.json", () => {
     const base = doc["documents"]["production"] as Record<string, unknown>;
     for (const patch of [
       { schema_version: 3 },
-      { schema_version: 8 },
+      { schema_version: 9 },
       { schema_version: "5" },
       { schema_version: undefined },
     ]) {

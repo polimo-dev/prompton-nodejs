@@ -201,6 +201,87 @@ export function snapshotDocument(
   };
 }
 
+/** The schema v8 wire shape: readable resource references, no public resource UUIDs. */
+export function readableSnapshotDocument(
+  environment = "production",
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const legacy = snapshotDocument(environment);
+  const legacyModels = legacy.models as Record<string, Record<string, unknown>>;
+  const legacyVersions = legacy.prompt_versions as Record<string, Record<string, unknown>>;
+  const deployments: Record<string, Record<string, unknown>> = {};
+  const promptVersions: Record<string, Record<string, unknown>> = {};
+  const models: Record<string, Record<string, unknown>> = {};
+
+  for (const [key, deployment] of Object.entries(legacy.deployments as Record<string, Record<string, unknown>>)) {
+    const model = legacyModels[String(deployment["model_id"])]!;
+    const provider = String(model["provider"]);
+    const modelName = String(model["model_id"]);
+    const defaultVersionId = ((deployment["template_pins"] as Record<string, unknown> | undefined) ?? {})["default"];
+    const version = legacyVersions[String(defaultVersionId)];
+    deployments[key] = {
+      revision: deployment["revision"],
+      provider,
+      model: modelName,
+      prompt_version: typeof version?.["number"] === "number" ? version["number"] : undefined,
+      api: deployment["api"],
+      request_path: deployment["request_path"],
+      params: deployment["params"],
+      provider_options: deployment["provider_options"],
+    };
+    if (version) {
+      const number = Number(version["number"]);
+      promptVersions[`${key}@${String(number)}`] = {
+        prompt: key,
+        number,
+        kind: version["kind"],
+        engine: version["engine"],
+        messages: version["messages"],
+        text_template: version["text_template"],
+        decision: version["decision"],
+        tools: version["tools"],
+      };
+    }
+  }
+
+  for (const model of Object.values(legacyModels)) {
+    const provider = String(model["provider"]);
+    const modelName = String(model["model_id"]);
+    models[`${provider}:${modelName}`] = {
+      provider,
+      model: modelName,
+      display_name: model["display_name"],
+      metadata: model["metadata"],
+      provider_options: model["provider_options"],
+      capabilities: model["capabilities"],
+      status: model["status"],
+    };
+  }
+
+  const prompts = Object.fromEntries(
+    Object.entries(legacy.prompts as Record<string, Record<string, unknown>>).map(([key, prompt]) => [
+      key,
+      {
+        kind: prompt["kind"],
+        input_schema: prompt["input_schema"],
+        default_params: prompt["default_params"],
+        payload_policy: prompt["payload_policy"],
+      },
+    ]),
+  );
+
+  return {
+    schema_version: 8,
+    project: legacy.project,
+    environment,
+    prompts,
+    deployments,
+    prompt_versions: promptVersions,
+    models,
+    ...overrides,
+  };
+}
+
 /** One request a stub or fake recorded. */
 export interface RecordedRequest {
   method: string;

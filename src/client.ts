@@ -74,7 +74,7 @@ export interface RenderedPrompt {
   request: PreparedRequest | null;
   params: Record<string, unknown>;
   providerOptions: Record<string, unknown>;
-  promptVersion: { id: string; number: number | null } | null;
+  promptVersion: { id: string | null; number: number | null } | null;
   messages: Message[] | null;
   text: string | null;
   decision: DecisionTemplate | null;
@@ -190,8 +190,8 @@ export class Prompt {
     return this.currentResolution.template;
   }
 
-  get promptVersion(): { id: string; number: number | null } | null {
-    if (this.currentResolution.promptVersionId === null) return null;
+  get promptVersion(): { id: string | null; number: number | null } | null {
+    if (this.currentResolution.promptVersionId === null && this.currentResolution.promptVersionNumber === null) return null;
     return {
       id: this.currentResolution.promptVersionId,
       number: this.currentResolution.promptVersionNumber,
@@ -204,6 +204,10 @@ export class Prompt {
 
   get source(): Resolution["source"] {
     return this.currentResolution.source;
+  }
+
+  get warnings(): Resolution["warnings"] {
+    return this.currentResolution.warnings;
   }
 
   messages(variables?: Record<string, unknown> | null, options: PromptOptions = {}): Message[] {
@@ -1355,7 +1359,7 @@ function mapRenderedPrompt(body: Record<string, unknown>): RenderedPrompt {
     promptVersion:
       version && typeof version === "object"
         ? {
-            id: textOf((version as Record<string, unknown>)["id"]),
+            id: typeof (version as Record<string, unknown>)["id"] === "string" ? textOf((version as Record<string, unknown>)["id"]) : null,
             number:
               typeof (version as Record<string, unknown>)["number"] === "number"
                 ? ((version as Record<string, unknown>)["number"] as number)

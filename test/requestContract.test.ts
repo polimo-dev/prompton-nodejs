@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
-import { PreparedRequestError, PromptOn, Result, TemplateRenderError } from "../src/index.js";
-import { fakeFetch, snapshotDocument, snapshotResponse } from "./helpers.js";
+import { PreparedRequestError, PromptOn, Result, TemplateRenderError, UnknownTemplateError } from "../src/index.js";
+import { fakeFetch, readableSnapshotDocument, snapshotDocument, snapshotResponse } from "./helpers.js";
 
 const clients: PromptOn[] = [];
 afterEach(async () => { await Promise.all(clients.splice(0).map((client) => client.close(100))); });
@@ -94,6 +94,92 @@ it("legacy v5 ignores injected request metadata and v6 requires the immutable ve
   delete (partial["prompt_versions"] as any)[versionId]["kind"];
   const broken = await loaded(partial).prompt("greeting");
   expect(() => broken.request({ name: "Ada" })).toThrow(PreparedRequestError);
+});
+
+it("reads schema v8 prompt documents without public resource UUIDs", async () => {
+  const client = loaded(readableSnapshotDocument());
+  const greeting = await client.prompt("greeting");
+  expect(greeting.deployment).toEqual({ id: null, revision: "v2026.09.30-3" });
+  expect(greeting.modelId).toBeNull();
+  expect(greeting.model).toBe("openai/gpt-4o-mini");
+  expect(greeting.provider).toBe("openrouter");
+  expect(greeting.promptVersion).toEqual({ id: null, number: 2 });
+  expect(greeting.messages({ name: "Ada" })[1]?.content).toBe("Say hello to Ada.");
+  const request = greeting.request({ name: "Ada" });
+  expect(request.body["model"]).toBe("openai/gpt-4o-mini");
+  expect(request.body).not.toHaveProperty("model_id");
+
+  await greeting.track(() => ({ content: "Hello", finishReason: "stop" }));
+  expect(client.logs[0]).toMatchObject({
+    deployment_revision: "v2026.09.30-3",
+    prompt_version_number: 2,
+    provider: "openrouter",
+    model: "openai/gpt-4o-mini",
+  });
+  expect(client.logs[0]).not.toHaveProperty("deployment_id");
+  expect(client.logs[0]).not.toHaveProperty("prompt_version_id");
+  expect(client.logs[0]).not.toHaveProperty("model_id");
+});
+
+it("scopes schema v8 prompt versions by prompt and models by provider", async () => {
+  const doc = readableSnapshotDocument();
+  (doc["prompts"] as any)["review"] = {
+    kind: "chat",
+    input_schema: [],
+    default_params: {},
+    payload_policy: null,
+  };
+  (doc["deployments"] as any)["review"] = {
+    revision: "v2026.09.30-7",
+    provider: "direct",
+    model: "openai/gpt-4o-mini",
+    prompt_version: 2,
+    api: "chat_completions",
+    request_path: "/v1/chat/completions",
+    params: {},
+    provider_options: {},
+  };
+  (doc["prompt_versions"] as any)["review@2"] = {
+    prompt: "review",
+    number: 2,
+    kind: "chat",
+    engine: "liquid",
+    messages: [{ role: "user", content: "Review {{ item }}." }],
+    text_template: null,
+  };
+  (doc["models"] as any)["direct:openai/gpt-4o-mini"] = {
+    provider: "direct",
+    model: "openai/gpt-4o-mini",
+    display_name: "Direct GPT-4o mini",
+    metadata: {},
+    provider_options: { base_url: "https://api.openai.example" },
+    capabilities: [],
+    status: "active",
+  };
+
+  const client = loaded(doc);
+  expect((await client.prompt("greeting")).providerOptions).toEqual({ only: ["OpenAI"] });
+  expect((await client.prompt("review")).providerOptions).toEqual({ base_url: "https://api.openai.example" });
+  expect((await client.prompt("review")).messages({ item: "diff" })).toEqual([
+    { role: "user", content: "Review diff." },
+  ]);
+});
+
+it("warns for schema v8 invalid pins and missing readable references", async () => {
+  const invalid = readableSnapshotDocument();
+  (invalid["deployments"] as any)["greeting"]["prompt_version"] = "latest";
+  await expect(loaded(invalid).prompt("greeting")).rejects.toThrow(UnknownTemplateError);
+
+  const missing = readableSnapshotDocument();
+  (missing["deployments"] as any)["greeting"]["prompt_version"] = 99;
+  (missing["deployments"] as any)["greeting"]["model"] = "missing/model";
+  const prompt = await loaded(missing).prompt("greeting");
+  expect(prompt.model).toBeNull();
+  expect(prompt.promptVersion).toBeNull();
+  expect(prompt.warnings).toEqual([
+    { kind: "missing_prompt_version", detail: "greeting@99" },
+    { kind: "missing_model", detail: "openrouter:missing/model" },
+  ]);
 });
 
 it("composes app history and current input while retaining prepared options and logging final messages", async () => {

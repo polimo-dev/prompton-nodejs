@@ -22,10 +22,10 @@ your app ──load prompt──▶ prompt + model + params          (per-prompt
 
 ## Install
 
-Install the v0.6.0 GitHub source release:
+Install the v0.7.0 GitHub source release:
 
 ```sh
-npm install github:polimo-dev/prompton-nodejs#v0.6.0
+npm install github:polimo-dev/prompton-nodejs#v0.7.0
 ```
 
 `dist/` is not committed; npm runs the package's `prepare` script on a git install, which builds it.
@@ -203,7 +203,7 @@ the right side wins and an override of `null` is kept as `null`.
 | `template`, `templateNames` | The chosen template name (`null` for an embedding prompt) and every name this revision pins |
 | `deployment` | The pin that produced this; `deployment.revision` is a string like `v2026.09.30-1` |
 | `promptVersion` | The pinned, immutable prompt version |
-| `model`, `modelId`, `provider` | The provider model string to send, the catalog UUID, and who serves it |
+| `model`, `modelId`, `provider` | The provider model string to send, the legacy catalog id (`null` for schema v8 documents), and who serves it |
 | `params`, `providerOptions` | The effective merges above |
 | `api`, `requestPath` | Which provider API family to call, and the origin-relative provider request path |
 | `source`, `etag` | `remote` / `disk` / `bundle` / `manual`, and the prompt document's ETag |
@@ -233,10 +233,11 @@ For Decision prompts, the body is `{ model, state, questions }` plus optional `p
 Chat and Decision protected fields such as `model`, `messages`, `state`, `questions`, `provider`,
 and `usage` cannot be overridden through params.
 
-Prepared requests require schema v6 metadata and the immutable pinned version kind. Legacy schema v5
-documents remain readable with the existing messages/text APIs. Unsupported or mismatched provider
-paths fail explicitly; cached OpenRouter Decision deployments using `/api/alpha/decisions` are still
-accepted for compatibility. Request options support `template`, `params`, `providerOptions`, and Decision
+Prepared requests require schema v6+ metadata and the immutable pinned version kind. Schema v8
+documents use readable references (`provider`, `model`, `prompt_version`) instead of resource UUIDs;
+legacy schema v5-v7 documents remain readable. Unsupported or mismatched provider paths fail
+explicitly; cached OpenRouter Decision deployments using `/api/alpha/decisions` are still accepted
+for compatibility. Request options support `template`, `params`, `providerOptions`, and Decision
 `session_id`, `trace`, `user` metadata. Chat omits null params; provider options preserve explicit null.
 Decision metadata values must be typed: session/user strings up to 256 characters, and trace objects.
 

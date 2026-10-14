@@ -177,6 +177,26 @@ describe("renderPrompt", () => {
     await expect(client.renderPrompt("greeting")).rejects.toThrow(/revision must be a string/u);
   });
 
+  it("accepts schema v8 render responses with only readable references", async () => {
+    const fetch = fakeFetch((url) => {
+      if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
+      return new Response(
+        JSON.stringify({
+          ...RESOLVE_BODY,
+          deployment: { revision: "v2026.09.30-3" },
+          model_id: undefined,
+          prompt_version: { number: 2 },
+        }),
+        { status: 200 },
+      );
+    });
+    const client = make(fetch);
+    const resolved = await client.renderPrompt("greeting");
+    expect(resolved.deployment).toEqual({ id: null, revision: "v2026.09.30-3" });
+    expect(resolved.modelId).toBeNull();
+    expect(resolved.promptVersion).toEqual({ id: null, number: 2 });
+  });
+
   it("backs off exponentially from the TTL when the server sends no Retry-After", async () => {
     let resolveCalls = 0;
     const fetch = fakeFetch((url) => {
