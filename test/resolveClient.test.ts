@@ -177,7 +177,7 @@ describe("renderPrompt", () => {
     await expect(client.renderPrompt("greeting")).rejects.toThrow(/revision must be a string/u);
   });
 
-  it("accepts schema v8 render responses with only readable references", async () => {
+  it("accepts schema v1 render responses with only readable references", async () => {
     const fetch = fakeFetch((url) => {
       if (!url.includes("/render")) return snapshotResponse(snapshotDocument());
       return new Response(

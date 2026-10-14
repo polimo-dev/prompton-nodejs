@@ -1,8 +1,8 @@
 import type { Engine, Message } from "./template.js";
 
 /**
- * Decoding of the `GET /prompts` body. Schema v7 adds canonical tool definitions and native messages while schema v5/v6
- * remain readable for existing bundles and disk caches.
+ * Decoding of schema v1 prompt detail and cached aggregate prompt documents.
+ * Lightweight prompt indexes are discovery-only and are rejected here.
  */
 
 /** How much of a generation's raw text the app may send. */
@@ -14,8 +14,8 @@ export interface PayloadPolicy {
   encrypt: boolean;
 }
 
-/** One input variable a prompt declares. */
-export interface InputVariable {
+/** One variable a prompt declares. */
+export interface VariableDefinition {
   name: string | null;
   type: string;
   required: boolean;
@@ -41,7 +41,7 @@ export interface PromptDefinition {
   id: string | null;
   key: string;
   kind: "chat" | "decision" | "text" | "embedding" | (string & {});
-  inputSchema: InputVariable[];
+  variables: VariableDefinition[];
   defaultParams: Record<string, unknown>;
   payloadPolicy: PayloadPolicy | null;
   deployment: PromptDeployment | null;
@@ -110,10 +110,8 @@ export interface DecodeResult {
   warnings: DecodeWarning[];
 }
 
-/** The current bulk prompt document schema version emitted by PromptOn. Schema v5-v7 remain accepted. */
-export const SCHEMA_VERSION = 8;
-
-const SUPPORTED_SCHEMA_VERSIONS = new Set([5, 6, 7, 8, 9]);
+/** The current prompt document schema version emitted by PromptOn. */
+export const SCHEMA_VERSION = 1;
 const KINDS = new Set(["chat", "decision", "text", "embedding"]);
 const ENGINES = new Set(["liquid", "raw"]);
 const PAYLOAD_MODES = new Set(["full", "hash", "none"]);
@@ -136,19 +134,17 @@ export function decodePromptDocument(input: unknown): DecodeResult {
   const warnings: DecodeWarning[] = [];
 
   const rawVersion = input["schema_version"];
-  if (typeof rawVersion === "number" && Number.isInteger(rawVersion)) {
-    if (!SUPPORTED_SCHEMA_VERSIONS.has(rawVersion)) {
-      throw new Error(
-        `unsupported prompt document schema_version ${String(rawVersion)}; this SDK reads versions 5 through 9`,
-      );
+  if (rawVersion !== SCHEMA_VERSION) {
+    if (typeof rawVersion === "number" && Number.isInteger(rawVersion)) {
+      throw new Error(`unsupported prompt document schema_version ${String(rawVersion)}; this SDK reads schema_version 1`);
     }
-  } else if (rawVersion !== undefined && rawVersion !== null) {
-    throw new Error(`prompt document schema_version must be integer ${String(SCHEMA_VERSION)}`);
-  } else {
+    if (rawVersion !== undefined && rawVersion !== null) {
+      throw new Error(`prompt document schema_version must be integer ${String(SCHEMA_VERSION)}`);
+    }
     throw new Error("prompt document schema_version is required");
   }
 
-  const normalized = rawVersion === 9 ? normalizeSinglePromptDocument(input) : input;
+  const normalized = normalizePromptDocument(input);
 
   if (!isRecord(normalized["prompts"])) throw new Error("prompt document prompts is required");
 
@@ -157,7 +153,7 @@ export function decodePromptDocument(input: unknown): DecodeResult {
 
   return {
     data: {
-      schemaVersion: rawVersion,
+      schemaVersion: SCHEMA_VERSION,
       project: asString(normalized["project"]),
       environment: asString(normalized["environment"]),
       prompts,
@@ -177,41 +173,47 @@ export function decodePromptDocument(input: unknown): DecodeResult {
   };
 }
 
-function normalizeSinglePromptDocument(input: Record<string, unknown>): Record<string, unknown> {
+function normalizePromptDocument(input: Record<string, unknown>): Record<string, unknown> {
+  if (Array.isArray(input["prompts"])) {
+    throw new Error("prompt index responses are discovery only and cannot be loaded as configuration");
+  }
+  const hasSingle = input["prompt"] !== undefined || input["deployment"] !== undefined || input["prompt_version"] !== undefined || input["model"] !== undefined;
+  if (!hasSingle) return input;
+
   for (const plural of ["prompts", "deployments", "prompt_versions", "models"]) {
     if (Object.hasOwn(input, plural)) {
-      throw new Error(`schema_version 9 prompt document must use singular resources; found ${plural}`);
+      throw new Error(`schema_version 1 prompt detail must use singular resources; found ${plural}`);
     }
   }
   const prompt = input["prompt"];
   const deployment = input["deployment"];
   const version = input["prompt_version"];
   const model = input["model"];
-  if (!isRecord(prompt)) throw new Error("schema v9 prompt document prompt is required");
-  if (!isRecord(deployment)) throw new Error("schema v9 prompt document deployment is required");
-  if (!isRecord(version)) throw new Error("schema v9 prompt document prompt_version is required");
-  if (!isRecord(model)) throw new Error("schema v9 prompt document model is required");
+  if (!isRecord(prompt)) throw new Error("schema v1 prompt document prompt is required");
+  if (!isRecord(deployment)) throw new Error("schema v1 prompt document deployment is required");
+  if (!isRecord(version)) throw new Error("schema v1 prompt document prompt_version is required");
+  if (!isRecord(model)) throw new Error("schema v1 prompt document model is required");
 
   const key = strictString(prompt["key"]);
-  if (key === null || key.trim() === "") throw new Error("schema v9 prompt.key is required");
+  if (key === null || key.trim() === "") throw new Error("schema v1 prompt.key is required");
   const versionPrompt = strictString(version["prompt"]);
-  if (versionPrompt !== key) throw new Error("schema v9 prompt_version.prompt must match prompt.key");
+  if (versionPrompt !== key) throw new Error("schema v1 prompt_version.prompt must match prompt.key");
   const number = strictPositiveInteger(version["number"]);
-  if (number === null) throw new Error("schema v9 prompt_version.number must be a positive integer");
+  if (number === null) throw new Error("schema v1 prompt_version.number must be a positive integer");
   if (deployment["prompt_version"] !== number) {
-    throw new Error("schema v9 deployment.prompt_version must match prompt_version.number");
+    throw new Error("schema v1 deployment.prompt_version must match prompt_version.number");
   }
   const provider = strictString(model["provider"]);
   const modelName = strictString(model["model"]);
-  if (provider === null || modelName === null) throw new Error("schema v9 model provider and model are required");
+  if (provider === null || modelName === null) throw new Error("schema v1 model provider and model are required");
   if (deployment["provider"] !== provider || deployment["model"] !== modelName) {
-    throw new Error("schema v9 deployment provider/model must match model");
+    throw new Error("schema v1 deployment provider/model must match model");
   }
 
   const promptBody = { ...prompt };
   delete promptBody["key"];
   return {
-    schema_version: 9,
+    schema_version: 1,
     project: input["project"],
     environment: input["environment"],
     prompts: { [key]: promptBody },
@@ -238,7 +240,7 @@ function decodePrompts(
       id: asString(value["id"]),
       key,
       kind,
-      inputSchema: decodeInputSchema(value["input_schema"], warnings),
+      variables: decodeVariables(value, warnings),
       defaultParams: asRecord(value["default_params"]),
       payloadPolicy: decodePayloadPolicy(value["payload_policy"], warnings),
       deployment: deployments[key] ?? null,
@@ -247,9 +249,13 @@ function decodePrompts(
   return prompts;
 }
 
-function decodeInputSchema(raw: unknown, warnings: DecodeWarning[]): InputVariable[] {
+function decodeVariables(rawPrompt: Record<string, unknown>, warnings: DecodeWarning[]): VariableDefinition[] {
+  if (Object.hasOwn(rawPrompt, "input_schema")) {
+    throw new Error("prompt variables must use variables, not input_schema");
+  }
+  const raw = rawPrompt["variables"];
   if (!Array.isArray(raw)) return [];
-  const variables: InputVariable[] = [];
+  const variables: VariableDefinition[] = [];
   for (const entry of raw) {
     if (!isRecord(entry)) {
       warnings.push({ kind: "invalid_variable", detail: entry });
@@ -287,7 +293,7 @@ function decodePayloadPolicy(raw: unknown, warnings: DecodeWarning[]): PayloadPo
 
 function decodeDeployments(
   raw: unknown,
-  schemaVersion: number,
+  _schemaVersion: number,
   warnings: DecodeWarning[],
 ): Record<string, PromptDeployment> {
   const deployments: Record<string, PromptDeployment> = {};
@@ -302,39 +308,28 @@ function decodeDeployments(
       continue;
     }
     const pins: Record<string, string> = {};
-    if (schemaVersion >= 8) {
-      const number = strictPositiveInteger(value["prompt_version"]);
-      if (number !== null) {
-        pins["default"] = `${key}@${String(number)}`;
-      } else if (value["prompt_version"] !== null && value["prompt_version"] !== undefined) {
-        warnings.push({ kind: "invalid_prompt_pin", detail: `${key}.default` });
+    const number = strictPositiveInteger(value["prompt_version"]);
+    if (number !== null) {
+      pins["default"] = `${key}@${String(number)}`;
+    } else if (isRecord(value["template_pins"])) {
+      for (const [name, versionId] of Object.entries(value["template_pins"])) {
+        const id = asString(versionId);
+        if (id === null) warnings.push({ kind: "invalid_prompt_pin", detail: `${key}.${name}` });
+        else pins[name] = id;
       }
-    } else {
-      const rawPins = value["template_pins"];
-      if (isRecord(rawPins)) {
-        for (const [name, versionId] of Object.entries(rawPins)) {
-          const id = asString(versionId);
-          if (id === null) {
-            warnings.push({ kind: "invalid_prompt_pin", detail: `${key}.${name}` });
-            continue;
-          }
-          pins[name] = id;
-        }
-      } else if (rawPins !== null && rawPins !== undefined) {
-        warnings.push({ kind: "invalid_template_pins", detail: key });
-      }
+    } else if (value["prompt_version"] !== null && value["prompt_version"] !== undefined) {
+      warnings.push({ kind: "invalid_prompt_pin", detail: `${key}.default` });
     }
-    const deploymentModelId = schemaVersion >= 8 ? modelKey(value["provider"], value["model"]) : asString(value["model_id"]);
-    if (schemaVersion >= 8 && deploymentModelId === null) {
-      warnings.push({ kind: "invalid_model_ref", detail: key });
-    }
+    const readableModelId = modelKey(value["provider"], value["model"]);
+    const deploymentModelId = readableModelId ?? asString(value["model_id"]);
+    if (deploymentModelId === null) warnings.push({ kind: "invalid_model_ref", detail: key });
     deployments[key] = {
-      id: schemaVersion >= 8 ? null : asString(value["id"]),
+      id: readableModelId !== null ? null : asString(value["id"]),
       promptKey: asString(value["prompt_key"]) ?? key,
       revision: asRevision(value["revision"], key),
-      modelId: schemaVersion >= 8 ? (deploymentModelId ?? `invalid:${key}`) : deploymentModelId,
-      api: schemaVersion >= 6 ? asString(value["api"]) : null,
-      requestPath: schemaVersion >= 6 ? asString(value["request_path"]) : null,
+      modelId: deploymentModelId ?? `invalid:${key}`,
+      api: asString(value["api"]),
+      requestPath: asString(value["request_path"]),
       params: asRecord(value["params"]),
       providerOptions: asRecord(value["provider_options"]),
       templatePins: pins,
@@ -389,28 +384,33 @@ function decodeById<T extends { id: string | null; lookupKey?: string | null }>(
 function decodePromptVersion(
   raw: Record<string, unknown>,
   fallbackId: string,
-  schemaVersion: number,
+  _schemaVersion: number,
   warnings: DecodeWarning[],
 ): PromptVersion | null {
   const engine = asString(raw["engine"]) ?? "liquid";
-  const kind = schemaVersion >= 6 ? asString(raw["kind"]) : null;
-  const promptKey = schemaVersion >= 8 ? strictString(raw["prompt"]) : asString(raw["prompt"]);
-  const number = schemaVersion >= 8 ? strictPositiveInteger(raw["number"]) : asInteger(raw["number"]);
-  const key = schemaVersion >= 8 && promptKey !== null && number !== null ? `${promptKey}@${String(number)}` : fallbackId;
-  if (schemaVersion >= 8 && (promptKey === null || number === null || key !== fallbackId)) {
+  const kind = asString(raw["kind"]);
+  const promptKey = strictString(raw["prompt"]);
+  const number = strictPositiveInteger(raw["number"]);
+  const readableKey = promptKey !== null && number !== null ? `${promptKey}@${String(number)}` : null;
+  if ((promptKey !== null || Object.hasOwn(raw, "prompt")) && readableKey === null) {
     warnings.push({ kind: "invalid_prompt_version", detail: fallbackId });
     return null;
   }
+  if (readableKey !== null && readableKey !== fallbackId) {
+    warnings.push({ kind: "invalid_prompt_version", detail: fallbackId });
+    return null;
+  }
+  const key = readableKey ?? fallbackId;
   return {
-    id: schemaVersion >= 8 ? null : (asString(raw["id"]) ?? fallbackId),
+    id: readableKey !== null ? null : (asString(raw["id"]) ?? fallbackId),
     lookupKey: key,
-    promptTemplateId: schemaVersion >= 8 ? promptKey : asString(raw["prompt_template_id"]),
-    number,
+    promptTemplateId: promptKey ?? asString(raw["prompt_template_id"]),
+    number: number ?? asInteger(raw["number"]),
     kind,
     engine: (ENGINES.has(engine) ? engine : "liquid") as Engine,
     messages: decodeMessages(raw["messages"]),
     textTemplate: asString(raw["text_template"]),
-    decision: schemaVersion >= 6 ? decodeDecision(raw["decision"]) : null,
+    decision: decodeDecision(raw["decision"]),
     tools: decodeTools(raw["tools"]),
   };
 }
@@ -450,22 +450,22 @@ function decodeTools(raw: unknown): ToolDefinitions | null {
 function decodeModel(
   raw: Record<string, unknown>,
   fallbackId: string,
-  schemaVersion: number,
+  _schemaVersion: number,
   warnings: DecodeWarning[],
 ): PromptModel | null {
   const capabilities = Array.isArray(raw["capabilities"])
     ? raw["capabilities"].map((value) => asString(value)).filter((value): value is string => value !== null)
     : [];
-  const provider = schemaVersion >= 8 ? strictString(raw["provider"]) : asString(raw["provider"]);
-  const model = schemaVersion >= 8 ? strictString(raw["model"]) : asString(raw["model_id"]);
-  const key = schemaVersion >= 8 && provider !== null && model !== null ? `${provider}:${model}` : fallbackId;
-  if (schemaVersion >= 8 && (provider === null || model === null || key !== fallbackId)) {
+  const provider = strictString(raw["provider"]);
+  const model = strictString(raw["model"]) ?? asString(raw["model_id"]);
+  const readableKey = provider !== null && strictString(raw["model"]) !== null ? `${provider}:${String(raw["model"])}` : null;
+  if (readableKey !== null && readableKey !== fallbackId) {
     warnings.push({ kind: "invalid_entry", detail: fallbackId });
     return null;
   }
   return {
-    id: schemaVersion >= 8 ? null : (asString(raw["id"]) ?? fallbackId),
-    lookupKey: key,
+    id: readableKey !== null ? null : (asString(raw["id"]) ?? fallbackId),
+    lookupKey: readableKey ?? fallbackId,
     provider,
     modelId: model,
     displayName: asString(raw["display_name"]),

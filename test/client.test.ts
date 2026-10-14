@@ -210,19 +210,11 @@ describe("resolution", () => {
       .toThrowError(PreparedRequestError);
   });
 
-  it("keeps legacy schema 5 documents readable but cannot prepare requests without metadata", async () => {
+  it("rejects legacy schema documents instead of treating them as cached prompt config", () => {
     const legacy = snapshotDocument();
     legacy["schema_version"] = 5;
-    for (const deployment of Object.values(legacy["deployments"] as Record<string, Record<string, unknown>>)) {
-      delete deployment["api"];
-      delete deployment["request_path"];
-    }
     const client = make({ mode: "test" });
-    client.loadPrompts(legacy);
-
-    const prompt = await client.prompt("greeting");
-    expect(prompt.messages({ name: "Ada" })[1]?.content).toBe("Say hello to Ada.");
-    expect(() => prompt.request({ name: "Ada" })).toThrowError(PreparedRequestError);
+    expect(() => client.loadPrompts(legacy)).toThrow(/unsupported prompt document schema_version 5/u);
   });
 
   it("has no template for an embedding prompt", async () => {

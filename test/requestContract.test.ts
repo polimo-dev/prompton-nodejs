@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
-import { PreparedRequestError, PromptOn, Result, TemplateRenderError, UnknownTemplateError, UnresolvedError } from "../src/index.js";
+import { decodePromptDocument, PreparedRequestError, PromptOn, Result, TemplateRenderError, UnknownTemplateError, UnresolvedError } from "../src/index.js";
 import { fakeFetch, readableSnapshotDocument, singlePromptDocument, snapshotDocument, snapshotResponse } from "./helpers.js";
 
 const clients: PromptOn[] = [];
@@ -82,13 +82,11 @@ it("preserves __proto__ as a question name and keeps keys literal", async () => 
   expect(JSON.parse(JSON.stringify(request.body))["questions"]["__proto__"]["instructions"]).toBe("Read hello");
 });
 
-it("legacy v5 ignores injected request metadata and v6 requires the immutable version kind", async () => {
+it("rejects non-v1 prompt documents and requires the immutable version kind", async () => {
   const legacy = snapshotDocument();
   legacy["schema_version"] = 5;
-  const client = loaded(legacy);
-  const prompt = await client.prompt("greeting");
-  expect(prompt.messages({ name: "Ada" })[1]?.content).toBe("Say hello to Ada.");
-  expect(() => prompt.request({ name: "Ada" })).toThrow(PreparedRequestError);
+  expect(() => loaded(legacy)).toThrow(/unsupported prompt document schema_version 5/u);
+
   const partial = snapshotDocument();
   const versionId = (partial["deployments"] as any)["greeting"]["template_pins"]["default"];
   delete (partial["prompt_versions"] as any)[versionId]["kind"];
@@ -96,7 +94,21 @@ it("legacy v5 ignores injected request metadata and v6 requires the immutable ve
   expect(() => broken.request({ name: "Ada" })).toThrow(PreparedRequestError);
 });
 
-it("reads schema v8 prompt documents without public resource UUIDs", async () => {
+it("decodes prompt variable definitions from variables and rejects old input_schema metadata", () => {
+  const decoded = decodePromptDocument(readableSnapshotDocument()).data;
+  expect(decoded.prompts["greeting"]?.variables).toEqual([
+    { name: "name", type: "string", required: true, description: null, example: null },
+  ]);
+  expect((decoded.prompts["greeting"] as any).inputSchema).toBeUndefined();
+
+  const old = readableSnapshotDocument();
+  const greeting = (old["prompts"] as any)["greeting"];
+  greeting["input_schema"] = greeting["variables"];
+  delete greeting["variables"];
+  expect(() => decodePromptDocument(old)).toThrow(/not input_schema/u);
+});
+
+it("reads schema v1 prompt documents without public resource UUIDs", async () => {
   const client = loaded(readableSnapshotDocument());
   const greeting = await client.prompt("greeting");
   expect(greeting.deployment).toEqual({ id: null, revision: "v2026.09.30-3" });
@@ -121,7 +133,7 @@ it("reads schema v8 prompt documents without public resource UUIDs", async () =>
   expect(client.logs[0]).not.toHaveProperty("model_id");
 });
 
-it("reads schema v9 single-prompt Chat and Decision documents", async () => {
+it("reads schema v1 single-prompt Chat and Decision documents", async () => {
   const greeting = await loaded(singlePromptDocument("greeting")).prompt("greeting");
   expect(greeting.deployment).toEqual({ id: null, revision: "v2026.09.30-3" });
   expect(greeting.modelId).toBeNull();
@@ -139,7 +151,7 @@ it("reads schema v9 single-prompt Chat and Decision documents", async () => {
   expect(request.body["questions"]).toHaveProperty("intensity");
 });
 
-it("rejects incomplete, mixed or mismatched schema v9 single-prompt documents", () => {
+it("rejects incomplete, mixed or mismatched schema v1 single-prompt documents", () => {
   const missing = singlePromptDocument("greeting");
   delete (missing as any)["prompt_version"];
   expect(() => loaded(missing)).toThrow(/prompt_version is required/u);
@@ -163,11 +175,11 @@ it("rejects incomplete, mixed or mismatched schema v9 single-prompt documents", 
   expect(() => loaded(badModel)).toThrow(/provider\/model/u);
 });
 
-it("scopes schema v8 prompt versions by prompt and models by provider", async () => {
+it("scopes schema v1 prompt versions by prompt and models by provider", async () => {
   const doc = readableSnapshotDocument();
   (doc["prompts"] as any)["review"] = {
     kind: "chat",
-    input_schema: [],
+    variables: [],
     default_params: {},
     payload_policy: null,
   };
@@ -207,7 +219,7 @@ it("scopes schema v8 prompt versions by prompt and models by provider", async ()
   ]);
 });
 
-it("fails closed for schema v8 invalid pins and missing readable references", async () => {
+it("fails closed for schema v1 invalid pins and missing readable references", async () => {
   for (const promptVersion of ["2", "2abc", 2.9, 0]) {
     const invalid = readableSnapshotDocument();
     (invalid["deployments"] as any)["greeting"]["prompt_version"] = promptVersion;
@@ -223,7 +235,7 @@ it("fails closed for schema v8 invalid pins and missing readable references", as
   await expect(loaded(missingModel).prompt("greeting")).rejects.toThrow(UnresolvedError);
 });
 
-it("drops schema v8 resources whose composite keys disagree with embedded fields", async () => {
+it("drops schema v1 resources whose composite keys disagree with embedded fields", async () => {
   const badVersion = readableSnapshotDocument();
   (badVersion["prompt_versions"] as any)["greeting@2"] = {
     ...(badVersion["prompt_versions"] as any)["greeting@2"],

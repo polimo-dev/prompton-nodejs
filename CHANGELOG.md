@@ -1,21 +1,12 @@
 # Changelog
 
-## 0.7.1
+## 0.8.0
 
-- Accept schema v9 single-prompt responses from `GET /api/v1/prompts/:key`, validating the flat `prompt`, `deployment`, `prompt_version` and `model` resources before normalizing them for existing local rendering.
-- Keep schema v9 response bytes unchanged in per-prompt disk caches and exported bundles so ETags stay tied to the original server body.
-
-## 0.7.0
-
-- Added schema v8 prompt document support. New remote, disk and bundle documents use readable
-  resource references: deployments pin `provider`, `model` and `prompt_version`; prompt versions
-  are keyed by `prompt@number`; models are keyed by `provider:model`.
-- Public resource id accessors such as `deployment.id`, `promptVersion.id` and `modelId` are `null`
-  for schema v8 documents, while readable evidence (`deployment_revision`, `provider`, `model`,
-  `prompt_version_number`) remains available for rendering, prepared requests and logs.
-- Remote render responses may omit `deployment.id`, `model_id` and `prompt_version.id`; the SDK
-  still exposes `promptVersion` when the server returns the version number.
-- Legacy schema v5-v7 disk caches and bundles remain readable.
+- Read only `schema_version: 1` prompt config documents. The SDK now rejects older and newer schema versions instead of keeping compatibility branches for stale cache or bundle files.
+- Accept schema v1 single-prompt responses from `GET /api/v1/prompts/:key`, validating the flat `prompt`, `deployment`, `prompt_version` and `model` resources before normalizing them for existing local rendering.
+- Reject lightweight `GET /api/v1/prompts` index responses as discovery-only data; local rendering still requires a per-key prompt detail document.
+- Rename prompt metadata from `inputSchema` / `input_schema` to `variables` with no alias or fallback. Provider-native tool schemas are preserved unchanged.
+- Keep schema v1 response bytes unchanged in per-prompt disk caches and exported bundles so ETags stay tied to the original server body.
 
 ## 0.6.0
 

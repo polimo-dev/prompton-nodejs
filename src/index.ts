@@ -63,7 +63,7 @@ export { decodePromptDocument, decodePromptDocumentJson, SCHEMA_VERSION } from "
 export type {
   DecodeResult,
   DecodeWarning,
-  InputVariable,
+  VariableDefinition,
   PayloadPolicy,
   PromptDocument,
   PromptDeployment,

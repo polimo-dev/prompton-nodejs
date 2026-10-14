@@ -29,7 +29,7 @@ export interface Resolution {
   promptKey: string;
   /** `chat`, `text` or `embedding`. */
   kind: string;
-  /** The immutable pinned version kind. Null for legacy schema v5 prompt documents. */
+  /** The immutable pinned version kind. Null only when the pinned version is unavailable. */
   pinnedKind: string | null;
   /** The chosen template name; `null` for an embedding prompt. */
   template: string | null;
@@ -45,7 +45,7 @@ export interface Resolution {
   promptVersionNumber: number | null;
   /** Which template engine the version was committed with. */
   engine: Engine | null;
-  /** The catalog model id (a UUID). */
+  /** The catalog model id for cached aggregate documents; null for readable schema v1 resources. */
   modelId: string | null;
   /** The provider model string to send in the request body, e.g. `openai/gpt-4o-mini`. */
   model: string | null;
@@ -114,13 +114,11 @@ export function resolvePromptFromSnapshot(
   const warnings: ResolutionWarning[] = [];
   const version = versionId === null ? null : (snapshot.promptVersions[versionId] ?? null);
   if (versionId !== null && version === null) {
-    if (snapshot.schemaVersion >= 8) throw new UnresolvedError(promptKey);
-    warnings.push({ kind: "missing_prompt_version", detail: versionId });
+    throw new UnresolvedError(promptKey);
   }
   const model = deployment.modelId === null ? null : (snapshot.models[deployment.modelId] ?? null);
   if (deployment.modelId !== null && model === null) {
-    if (snapshot.schemaVersion >= 8) throw new UnresolvedError(promptKey);
-    warnings.push({ kind: "missing_model", detail: deployment.modelId });
+    throw new UnresolvedError(promptKey);
   }
 
   const runtimeKind = version?.kind ?? prompt.kind;

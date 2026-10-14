@@ -457,7 +457,7 @@ describe("the three tiers", () => {
       "/api/v1/prompts/summarize",
     ]);
   });
-  it("mirrors a fetched schema v9 single-prompt response byte-for-byte and reloads it", async () => {
+  it("mirrors a fetched schema v1 single-prompt response byte-for-byte and reloads it", async () => {
     const dir = tempDir();
     cleanups.push(dir.cleanup);
     const path = join(dir.path, "snap.json");

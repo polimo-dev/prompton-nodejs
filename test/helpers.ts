@@ -12,14 +12,14 @@ export function snapshotDocument(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    schema_version: 6,
+    schema_version: 1,
     project: "sdkfixture",
     environment,
     prompts: {
       greeting: {
         id: "0198f2a1-0000-7000-8000-00000000c001",
         kind: "chat",
-        input_schema: [{ name: "name", type: "string", required: true }],
+        variables: [{ name: "name", type: "string", required: true }],
         default_params: { temperature: 0.2, max_tokens: 512 },
         payload_policy: {
           mode: "full",
@@ -32,28 +32,28 @@ export function snapshotDocument(
       summarize: {
         id: "0198f2a1-0000-7000-8000-00000000c002",
         kind: "text",
-        input_schema: [],
+        variables: [],
         default_params: {},
         payload_policy: null,
       },
       embed: {
         id: "0198f2a1-0000-7000-8000-00000000c003",
         kind: "embedding",
-        input_schema: [],
+        variables: [],
         default_params: { dimensions: 256 },
         payload_policy: null,
       },
       draft: {
         id: "0198f2a1-0000-7000-8000-00000000c004",
         kind: "chat",
-        input_schema: [],
+        variables: [],
         default_params: {},
         payload_policy: null,
       },
       sentiment: {
         id: "0198f2a1-0000-7000-8000-00000000c005",
         kind: "decision",
-        input_schema: [{ name: "diary", type: "string", required: true }],
+        variables: [{ name: "diary", type: "string", required: true }],
         default_params: {},
         payload_policy: null,
       },
@@ -201,7 +201,7 @@ export function snapshotDocument(
   };
 }
 
-/** The schema v8 wire shape: readable resource references, no public resource UUIDs. */
+/** The schema v1 aggregate wire shape: readable resource references, no public resource UUIDs. */
 export function readableSnapshotDocument(
   environment = "production",
   overrides: Record<string, unknown> = {},
@@ -263,7 +263,7 @@ export function readableSnapshotDocument(
       key,
       {
         kind: prompt["kind"],
-        input_schema: prompt["input_schema"],
+        variables: prompt["variables"],
         default_params: prompt["default_params"],
         payload_policy: prompt["payload_policy"],
       },
@@ -271,7 +271,7 @@ export function readableSnapshotDocument(
   );
 
   return {
-    schema_version: 8,
+    schema_version: 1,
     project: legacy.project,
     environment,
     prompts,
@@ -282,7 +282,7 @@ export function readableSnapshotDocument(
   };
 }
 
-/** The schema v9 single-prompt wire shape returned by GET /prompts/:key. */
+/** The schema v1 single-prompt wire shape returned by GET /prompts/:key. */
 export function singlePromptDocument(
   key = "greeting",
   environment = "production",
@@ -301,7 +301,7 @@ export function singlePromptDocument(
   const model = models[`${String(deployment["provider"])}:${String(deployment["model"])}`];
   if (!version || !model) throw new Error(`missing fixture resources for ${key}`);
   return {
-    schema_version: 9,
+    schema_version: 1,
     project: readable["project"],
     environment,
     prompt: { key, ...prompt },

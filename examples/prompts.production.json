@@ -1,11 +1,11 @@
 {
-  "schema_version": 8,
+  "schema_version": 1,
   "project": "sdkfixture",
   "environment": "production",
   "prompts": {
     "greeting": {
       "kind": "chat",
-      "input_schema": [
+      "variables": [
         {
           "name": "name",
           "type": "string",
